@@ -17,6 +17,7 @@ export {
 	collectDiscoverableMCPTools,
 	formatDiscoverableMCPToolServerSummary,
 	getDiscoverableMCPTool,
+	isMCPBridgeTool,
 	isMCPToolName,
 	searchDiscoverableMCPTools,
 	selectDiscoverableMCPToolNamesByServer,

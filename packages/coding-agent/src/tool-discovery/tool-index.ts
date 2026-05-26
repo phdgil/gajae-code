@@ -105,6 +105,16 @@ export function isMCPToolName(name: string): boolean {
 	return name.startsWith("mcp__");
 }
 
+export function isMCPBridgeTool(tool: { name: string; mcpServerName?: unknown; mcpToolName?: unknown }): boolean {
+	return (
+		isMCPToolName(tool.name) &&
+		typeof tool.mcpServerName === "string" &&
+		tool.mcpServerName.length > 0 &&
+		typeof tool.mcpToolName === "string" &&
+		tool.mcpToolName.length > 0
+	);
+}
+
 function getSchemaPropertyKeys(parameters: unknown): string[] {
 	if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return [];
 	const properties = (parameters as { properties?: unknown }).properties;
@@ -300,7 +310,6 @@ export function searchDiscoverableTools(
 
 /** @deprecated Use getDiscoverableTool */
 export function getDiscoverableMCPTool(tool: AgentTool): DiscoverableMCPTool | null {
-	if (!isMCPToolName(tool.name)) return null;
 	const toolRecord = tool as AgentTool & {
 		label?: string;
 		description?: string;
@@ -308,6 +317,7 @@ export function getDiscoverableMCPTool(tool: AgentTool): DiscoverableMCPTool | n
 		mcpToolName?: string;
 		parameters?: unknown;
 	};
+	if (!isMCPBridgeTool(toolRecord)) return null;
 	return {
 		name: tool.name,
 		label: typeof toolRecord.label === "string" ? toolRecord.label : tool.name,
