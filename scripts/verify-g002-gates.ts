@@ -200,6 +200,13 @@ async function verifyMcpQuarantine(): Promise<GateResult> {
 	const importsMcpBuiltinHandler = builtinRegistry.includes("handleMcpAcp");
 	const acpReferencesMcpHandler = acpBuiltins.includes("handleMcpAcp");
 	const acpAdvertisesMcpCommand = /name:\s*["']mcp["']/.test(acpBuiltins);
+	const exaProvider = await readText("packages/coding-agent/src/web/search/providers/exa.ts");
+	const exaRequiresApiKey = exaProvider.includes("return !!getEnvApiKey(\"exa\")");
+	const exaUsesPublicMcpFallback =
+		exaProvider.includes("callExaMcpSearch") ||
+		exaProvider.includes("callExaTool") ||
+		exaProvider.includes("mcp.exa.ai") ||
+		exaProvider.includes("../../../exa/mcp-client");
 	const internalMcpPaths = [
 		"packages/coding-agent/src/runtime-mcp",
 		"packages/coding-agent/src/slash-commands/helpers/mcp.ts",
@@ -221,6 +228,8 @@ async function verifyMcpQuarantine(): Promise<GateResult> {
 		`default /mcp handler imported: ${importsMcpBuiltinHandler}`,
 		`ACP /mcp command advertised: ${acpAdvertisesMcpCommand}`,
 		`ACP MCP handler referenced: ${acpReferencesMcpHandler}`,
+		`Exa search requires EXA_API_KEY: ${exaRequiresApiKey}`,
+		`Exa public MCP fallback present: ${exaUsesPublicMcpFallback}`,
 		`private MCP implementation paths retained: ${presentInternalMcpPaths.join(", ") || "<none>"}`,
 		`public doc findings: ${publicDocFindings.join(", ") || "<none>"}`,
 		`forbidden package imports still resolving: ${forbiddenImportFindings.join(", ") || "<none>"}`,
@@ -238,7 +247,9 @@ async function verifyMcpQuarantine(): Promise<GateResult> {
 			!exposesMcpBuiltin &&
 			!importsMcpBuiltinHandler &&
 			!acpAdvertisesMcpCommand &&
-			!acpReferencesMcpHandler,
+			!acpReferencesMcpHandler &&
+			exaRequiresApiKey &&
+			!exaUsesPublicMcpFallback,
 		details,
 	};
 }

@@ -2554,7 +2554,7 @@ export const SETTINGS_SCHEMA = {
 					label: "Auto",
 					description: "Preferred web-search provider",
 				},
-				{ value: "exa", label: "Exa", description: "Uses Exa API when EXA_API_KEY is set; falls back to Exa MCP" },
+				{ value: "exa", label: "Exa", description: "Uses Exa API when EXA_API_KEY is set" },
 				{ value: "brave", label: "Brave", description: "Requires BRAVE_API_KEY" },
 				{ value: "jina", label: "Jina", description: "Requires JINA_API_KEY" },
 				{ value: "kimi", label: "Kimi", description: "Requires MOONSHOT_SEARCH_API_KEY or MOONSHOT_API_KEY" },
