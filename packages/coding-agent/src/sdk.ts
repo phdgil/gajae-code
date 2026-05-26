@@ -1686,7 +1686,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));
-		const discoverableMCPToolNames = new Set(collectDiscoverableMCPTools(toolRegistry.values()).map(tool => tool.name));
+		const discoverableMCPToolNames = new Set(
+			collectDiscoverableMCPTools(toolRegistry.values()).map(tool => tool.name),
+		);
 		const explicitlyRequestedMCPToolNames = options.toolNames
 			? requestedActiveToolNames.filter(name => discoverableMCPToolNames.has(name))
 			: [];

@@ -2942,7 +2942,9 @@ export class AgentSession {
 	}
 
 	#getActiveNonMCPToolNames(): string[] {
-		return this.getActiveToolNames().filter(name => !this.#discoverableMCPTools.has(name) && this.#toolRegistry.has(name));
+		return this.getActiveToolNames().filter(
+			name => !this.#discoverableMCPTools.has(name) && this.#toolRegistry.has(name),
+		);
 	}
 
 	/**
