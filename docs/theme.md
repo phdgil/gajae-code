@@ -98,7 +98,7 @@ Invalid override keys are ignored and logged (`logger.debug`).
 
 Theme lookup order (`loadThemeJson`):
 
-1. built-in embedded themes (`dark.json`, `light.json`, and all `defaults/*.json` compiled into `defaultThemes`)
+1. built-in embedded themes (`dark.json`, `light.json`, and all `defaults/*.json` compiled into `defaultThemes`, including the red-claw crustacean theme)
 2. custom theme file: `<customThemesDir>/<name>.json`
 
 Custom themes directory comes from `getCustomThemesDir()`:
@@ -162,6 +162,8 @@ Auto theme slot selection uses terminal appearance in this order:
 2. `COLORFGBG` background index (`< 8` => dark, `>= 8` => light)
 3. macOS appearance fallback only for the known-broken macOS/Zellij OSC 11 path
 4. dark slot fallback
+
+Built-in theme note: `red-claw` is the bundled crustacean theme, with red/orange shell colors and crab-oriented symbol overrides.
 
 Current defaults from settings schema:
 
@@ -232,7 +234,7 @@ Legacy migration exists: old flat `theme: "name"` is migrated to nested `theme.d
 1. Create file in custom themes dir, e.g. `~/.gjc/agent/themes/my-theme.json`.
 2. Include `name`, optional `vars`, and **all required** `colors` tokens.
 3. Optionally include `symbols` and `export`.
-4. Select the theme in Settings (`Display -> Dark theme` or `Display -> Light theme`) depending on which auto slot you want.
+4. Select the theme in Settings (`Display -> Dark theme` or `Display -> Light theme`) depending on which auto slot you want. For the bundled crustacean look, choose `red-claw`.
 
 Minimal skeleton:
 

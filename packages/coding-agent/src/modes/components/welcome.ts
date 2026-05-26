@@ -14,7 +14,7 @@ export interface LspServerInfo {
 }
 
 /**
- * Premium welcome screen with block-based GJC logo and two-column layout.
+ * Premium welcome screen with red-claw GJC mark and two-column layout.
  */
 export class WelcomeComponent implements Component {
 	#animStart: number | null = null;
@@ -78,7 +78,7 @@ export class WelcomeComponent implements Component {
 		}
 		const dualContentWidth = boxWidth - 3; // 3 = │ + │ + │
 		const preferredLeftCol = 26;
-		const minLeftCol = 12; // logo width
+		const minLeftCol = 12; // red-claw logo width
 		const minRightCol = 20;
 		const leftMinContentWidth = Math.max(
 			minLeftCol,
@@ -267,24 +267,24 @@ export class WelcomeComponent implements Component {
 		// the same ease-out curve so the highlight is gone by the resting frame.
 		const shinePos = (((progress * INTRO_SHINE_TRAVERSALS) % 1) + 1) % 1;
 		const shineStrength = (1 - eased) ** 1.5;
-		return gradientLogo(PI_LOGO, phase, { strength: shineStrength, pos: shinePos });
+		return gradientLogo(RED_CLAW_LOGO, phase, { strength: shineStrength, pos: shinePos });
 	}
 }
 
 // biome-ignore format: preserve ASCII art layout
-const PI_LOGO = ["▀██████████▀", " ╘██    ██  ", "  ██    ██  ", "  ██    ██  ", " ▄██▄  ▄██▄ "];
+const RED_CLAW_LOGO = ["╭─╮    ╭─╮", "╰─╲╭──╮╱─╯", "  │●  ●│  ", "  ╰╮▔▔╭╯  ", "   ╰──╯   "];
 
-/** Multi-stop palette for the diagonal gradient. */
+/** Multi-stop palette for the red-claw diagonal gradient. */
 const GRADIENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
-	[255, 92, 200], // hot pink
-	[200, 110, 255], // violet
-	[120, 130, 255], // periwinkle
-	[60, 200, 255], // bright cyan
-	[120, 255, 220], // mint
+	[127, 29, 29], // deep shell red
+	[220, 38, 38], // claw red
+	[249, 115, 22], // orange coral
+	[255, 138, 101], // bright coral
+	[255, 215, 168], // shell highlight
 ];
 
 /** 256-color ramp fallback when truecolor isn't available. */
-const GRADIENT_RAMP_256 = [199, 171, 135, 99, 75, 51, 87];
+const GRADIENT_RAMP_256 = [52, 88, 124, 160, 202, 209, 215];
 
 /** Half-width of the shine highlight band, expressed in gradient-t units. */
 const SHINE_HALF_WIDTH = 0.18;
@@ -373,4 +373,4 @@ const INTRO_SWEEPS = 2.5;
 const INTRO_SHINE_TRAVERSALS = 3;
 
 /** Resting gradient frame, cached for re-renders outside of the intro. */
-const REST_FRAME = gradientLogo(PI_LOGO, 0);
+const REST_FRAME = gradientLogo(RED_CLAW_LOGO, 0);

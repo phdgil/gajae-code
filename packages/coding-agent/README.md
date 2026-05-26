@@ -31,3 +31,7 @@ The agent supports three mutually-exclusive memory backends, selected via the `m
    - `HINDSIGHT_BANK_MISSION`, `HINDSIGHT_DEBUG`
 
 Switching backends mid-session is honoured on the next system-prompt rebuild and the next `/memory` slash command. Existing users with `memories.enabled = true|false` are migrated to `memory.backend = "local"|"off"` exactly once on first launch.
+
+## Red-claw TUI theme
+
+The interactive TUI ships with a bundled `red-claw` crustacean theme and matching welcome/icon assets. Select it from Settings → Appearance or set `theme.dark: red-claw` in `~/.gjc/agent/config.yml`.

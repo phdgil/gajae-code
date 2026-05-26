@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="https://github.com/can1357/gajae-code/blob/main/assets/hero.png?raw=true" alt="gjc">
+  <img src="https://github.com/can1357/gajae-code/blob/main/assets/hero.png?raw=true" alt="gjc red-claw coding agent">
 </p>
 
 <p align="center">
-  <strong>A coding agent with the IDE wired in.</strong>
+  <strong>A red-claw coding agent with the IDE wired in.</strong>
   <strong><a href="https://github.com/can1357/gajae-code">github.com/can1357/gajae-code</a></strong>
 </p>
 
@@ -362,7 +362,7 @@ Same engine, four wrappers. `gjc` runs the TUI. `gjc -p` answers a single prompt
 
 ### Interactive — when in doubt, the agent asks
 
-The TUI is the default surface. Tool calls render as cards, edits preview before they land, and ambiguity routes through the `ask` tool — a structured option picker the agent can call mid-turn. The keyboard handles the rest.
+The TUI is the default surface, now anchored by the red-claw welcome mark and the bundled `red-claw` crustacean theme. Tool calls render as cards, edits preview before they land, and ambiguity routes through the `ask` tool — a structured option picker the agent can call mid-turn. The keyboard handles the rest.
 
 The same prompt cards surface over ACP, so editors get the picker without writing one.
 
