@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -19,6 +20,17 @@ function run(command: string, args: string[], cwd: string): string {
 	throw new Error(result.stderr.toString().trim() || `${command} ${args.join(" ")} failed`);
 }
 
+function testSlug(value: string): string {
+	const readable = value
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/-+/g, "-")
+		.replace(/^-|-$/g, "");
+	const prefix = readable || "default";
+	const digest = crypto.createHash("sha256").update(value).digest("hex").slice(0, 8);
+	return `${prefix}-${digest}`;
+}
+
 async function createRepo(prefix: string): Promise<string> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
 	cleanupRoots.push(root);
@@ -33,13 +45,14 @@ async function createRepo(prefix: string): Promise<string> {
 
 afterEach(async () => {
 	for (const root of cleanupRoots.splice(0)) {
-		const bucket = path.join(path.dirname(root), `${path.basename(root)}.gjc-worktrees`);
-		Bun.spawnSync(["git", "worktree", "remove", "--force", path.join(bucket, "launch-detached")], {
+		const bucket = path.join(path.dirname(root), `${path.basename(root)}.gajae-code-worktrees`);
+		const branchSlug = testSlug(run("git", ["branch", "--show-current"], root));
+		Bun.spawnSync(["git", "worktree", "remove", "--force", path.join(bucket, branchSlug)], {
 			cwd: root,
 			stdout: "ignore",
 			stderr: "ignore",
 		});
-		Bun.spawnSync(["git", "worktree", "remove", "--force", path.join(bucket, "launch-feature-demo")], {
+		Bun.spawnSync(["git", "worktree", "remove", "--force", path.join(bucket, "feature-demo")], {
 			cwd: root,
 			stdout: "ignore",
 			stderr: "ignore",
@@ -64,7 +77,11 @@ describe("default launch worktrees", () => {
 			mode: { enabled: true, detached: false, name: "feature/demo" },
 			remainingArgs: ["hello"],
 		});
-		expect(parseLaunchWorktreeMode(["-w", "feature/demo", "hello"])).toEqual({
+		expect(parseLaunchWorktreeMode(["-w", "hello"])).toEqual({
+			mode: { enabled: true, detached: true, name: null },
+			remainingArgs: ["hello"],
+		});
+		expect(parseLaunchWorktreeMode(["-w=feature/demo", "hello"])).toEqual({
 			mode: { enabled: true, detached: false, name: "feature/demo" },
 			remainingArgs: ["hello"],
 		});
@@ -75,7 +92,8 @@ describe("default launch worktrees", () => {
 		await fs.mkdir(path.join(repo, "node_modules"));
 
 		const first = prepareLaunchWorktree(repo, ["--worktree", "hello"]);
-		const expectedPath = path.join(path.dirname(repo), `${path.basename(repo)}.gjc-worktrees`, "launch-detached");
+		const branchSlug = testSlug(run("git", ["branch", "--show-current"], repo));
+		const expectedPath = path.join(path.dirname(repo), `${path.basename(repo)}.gajae-code-worktrees`, branchSlug);
 
 		expect(await fs.realpath(first.cwd)).toBe(await fs.realpath(expectedPath));
 		expect(first.args).toEqual(["hello"]);
@@ -121,17 +139,43 @@ describe("default launch worktrees", () => {
 		const repo = await createRepo("gjc-launch-named-worktree-");
 		const planned = planLaunchWorktree(repo, { enabled: true, detached: false, name: "feature/demo" });
 		const ensured = ensureLaunchWorktree(planned);
-		const expectedPath = path.join(path.dirname(repo), `${path.basename(repo)}.gjc-worktrees`, "launch-feature-demo");
+		const expectedPath = path.join(
+			path.dirname(repo),
+			`${path.basename(repo)}.gajae-code-worktrees`,
+			testSlug("feature/demo"),
+		);
 
 		expect(ensured.enabled && (await fs.realpath(ensured.worktreePath))).toBe(await fs.realpath(expectedPath));
 		expect(ensured.enabled && ensured.branchName).toBe("feature/demo");
 		expect(run("git", ["branch", "--show-current"], expectedPath)).toBe("feature/demo");
 	});
 
-	it("uses the source repo and launch worktree in generated tmux session names", async () => {
+	it("keeps launch worktree slugs collision-resistant for similar branch names", async () => {
+		const repo = await createRepo("gjc-launch-collision-worktree-");
+		const slashPlan = planLaunchWorktree(repo, { enabled: true, detached: false, name: "feature/demo" });
+		const dashPlan = planLaunchWorktree(repo, { enabled: true, detached: false, name: "feature-demo" });
+		const casePlan = planLaunchWorktree(repo, { enabled: true, detached: false, name: "Feature" });
+		const lowerPlan = planLaunchWorktree(repo, { enabled: true, detached: false, name: "feature" });
+		const unicodePlan = planLaunchWorktree(repo, { enabled: true, detached: false, name: "é" });
+		const asciiPlan = planLaunchWorktree(repo, { enabled: true, detached: false, name: "e9" });
+
+		expect(slashPlan.enabled && slashPlan.worktreePath.endsWith(testSlug("feature/demo"))).toBe(true);
+		expect(dashPlan.enabled && dashPlan.worktreePath.endsWith(testSlug("feature-demo"))).toBe(true);
+		expect(slashPlan.enabled && dashPlan.enabled && slashPlan.worktreePath).not.toBe(
+			dashPlan.enabled && dashPlan.worktreePath,
+		);
+		expect(casePlan.enabled && lowerPlan.enabled && casePlan.worktreePath).not.toBe(
+			lowerPlan.enabled && lowerPlan.worktreePath,
+		);
+		expect(unicodePlan.enabled && asciiPlan.enabled && unicodePlan.worktreePath).not.toBe(
+			asciiPlan.enabled && asciiPlan.worktreePath,
+		);
+	});
+
+	it("uses the launch worktree as the generated tmux cwd", async () => {
 		const repo = await createRepo("gjc-session-worktree-");
 		const launch = prepareLaunchWorktree(repo, ["--worktree"]);
-		const parsed = { messages: [], fileArgs: [], unknownFlags: new Map() } satisfies Args;
+		const parsed = { messages: [], fileArgs: [], unknownFlags: new Map(), tmux: true } satisfies Args;
 		const plan = buildDefaultTmuxLaunchPlan({
 			parsed,
 			rawArgs: launch.args,
@@ -144,7 +188,7 @@ describe("default launch worktrees", () => {
 			tmuxAvailable: true,
 		});
 
-		expect(plan?.sessionName).toContain(`${path.basename(repo).toLowerCase()}-launch-detached-head`);
+		expect(plan?.cwd).toBe(launch.cwd);
 		expect(plan?.newSessionArgs).toContain(launch.cwd);
 	});
 });

@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -49,12 +50,20 @@ function tryRunGit(cwd: string, args: string[]): string | null {
 }
 
 function sanitizePathToken(value: string): string {
-	const normalized = value
+	const readable = value
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/-+/g, "-")
 		.replace(/^-|-$/g, "");
-	return normalized || "default";
+	const prefix = readable || "default";
+	const digest = crypto.createHash("sha256").update(value).digest("hex").slice(0, 8);
+	return `${prefix}-${digest}`;
+}
+
+function resolveSourceBranchSlug(repoRoot: string, baseRef: string): string {
+	const branch = tryRunGit(repoRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+	if (branch) return sanitizePathToken(branch);
+	return `head-${baseRef.slice(0, 12)}`;
 }
 
 function branchExists(repoRoot: string, branchName: string): boolean {
@@ -146,13 +155,7 @@ export function parseLaunchWorktreeMode(args: string[]): ParsedLaunchWorktreeMod
 			continue;
 		}
 		if (arg === "-w") {
-			const next = args[index + 1];
-			if (typeof next === "string" && next.length > 0 && !next.startsWith("-") && !next.includes(":")) {
-				mode = { enabled: true, detached: false, name: next };
-				index += 1;
-			} else {
-				mode = { enabled: true, detached: true, name: null };
-			}
+			mode = { enabled: true, detached: true, name: null };
 			continue;
 		}
 		if (arg.startsWith("--worktree=")) {
@@ -180,10 +183,9 @@ export function planLaunchWorktree(
 	const baseRef = runGit(repoRoot, ["rev-parse", "HEAD"]);
 	const branchName = mode.detached ? null : mode.name;
 	if (branchName) validateBranchName(repoRoot, branchName);
-	const bucket = `${path.basename(repoRoot)}.gjc-worktrees`;
-	const worktreePath = mode.detached
-		? path.join(path.dirname(repoRoot), bucket, "launch-detached")
-		: path.join(path.dirname(repoRoot), bucket, `launch-${sanitizePathToken(mode.name)}`);
+	const bucket = `${path.basename(repoRoot)}.gajae-code-worktrees`;
+	const worktreeSlug = mode.detached ? resolveSourceBranchSlug(repoRoot, baseRef) : sanitizePathToken(mode.name);
+	const worktreePath = path.join(path.dirname(repoRoot), bucket, worktreeSlug);
 	return { enabled: true, repoRoot, worktreePath, detached: mode.detached, baseRef, branchName };
 }
 
