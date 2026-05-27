@@ -1,6 +1,6 @@
 Lists, inspects, awaits, or cancels detached task subagents.
 
-Task launches return immediately. Use this tool when you need direct control over those running subagents; generic `job` remains available for all background job types.
+Task launches return immediately. Use this tool when you need direct control over those running subagents. Prefer `subagent` for task subagents; generic `job` remains available for non-subagent jobs and compatibility fallback access.
 
 # Operations
 
