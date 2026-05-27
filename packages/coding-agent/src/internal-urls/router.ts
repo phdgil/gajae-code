@@ -10,7 +10,6 @@ import { ArtifactProtocolHandler } from "./artifact-protocol";
 import { GjcProtocolHandler } from "./gjc-protocol";
 import { IssueProtocolHandler, PrProtocolHandler } from "./issue-pr-protocol";
 import { LocalProtocolHandler } from "./local-protocol";
-import { McpProtocolHandler } from "./mcp-protocol";
 import { MemoryProtocolHandler } from "./memory-protocol";
 import { parseInternalUrl } from "./parse";
 import { RuleProtocolHandler } from "./rule-protocol";
@@ -26,7 +25,6 @@ export class InternalUrlRouter {
 		this.register(new AgentProtocolHandler());
 		this.register(new ArtifactProtocolHandler());
 		this.register(new MemoryProtocolHandler());
-		this.register(new McpProtocolHandler());
 		this.register(new LocalProtocolHandler());
 		this.register(new RuleProtocolHandler());
 		this.register(new IssueProtocolHandler());
