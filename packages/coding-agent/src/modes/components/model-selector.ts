@@ -57,8 +57,6 @@ interface ModelItem {
 	id: string;
 	model: Model;
 	selector: string;
-	available?: boolean;
-	setupHint?: string;
 	thinkingLevel?: ThinkingLevel;
 	explicitThinkingLevel?: boolean;
 }
@@ -72,8 +70,6 @@ interface CanonicalModelItem {
 	searchText: string;
 	normalizedSearchText: string;
 	compactSearchText: string;
-	available: boolean;
-	setupHint?: string;
 	thinkingLevel?: ThinkingLevel;
 	explicitThinkingLevel?: boolean;
 }
@@ -98,7 +94,6 @@ type RoleSelectCallback = (
 	selector?: string,
 ) => void;
 type CancelCallback = () => void;
-type LoginProviderCallback = (providerId: string) => void | Promise<void>;
 
 interface ProviderTabState {
 	id: string;
@@ -142,7 +137,6 @@ export class ModelSelectorComponent extends Container {
 	#modelRegistry = null as unknown as ModelRegistry;
 	#onSelectCallback = (() => {}) as RoleSelectCallback;
 	#onCancelCallback = (() => {}) as CancelCallback;
-	#onLoginProviderCallback?: LoginProviderCallback;
 	#errorMessage?: unknown;
 	#tui: TUI;
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
@@ -169,7 +163,7 @@ export class ModelSelectorComponent extends Container {
 			selector?: string,
 		) => void,
 		onCancel: () => void,
-		options?: { temporaryOnly?: boolean; initialSearchInput?: string; onLoginProvider?: LoginProviderCallback },
+		options?: { temporaryOnly?: boolean; initialSearchInput?: string },
 	) {
 		super();
 
@@ -179,7 +173,6 @@ export class ModelSelectorComponent extends Container {
 		this.#scopedModels = scopedModels;
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
-		this.#onLoginProviderCallback = options?.onLoginProvider;
 		this.#temporaryOnly = options?.temporaryOnly ?? false;
 		const initialSearchInput = options?.initialSearchInput;
 
@@ -357,7 +350,6 @@ export class ModelSelectorComponent extends Container {
 
 	async #loadModels(): Promise<void> {
 		let models: ModelItem[];
-		let catalogModels: ModelItem[] | undefined;
 
 		// Use scoped models if provided via --models flag
 		if (this.#scopedModels.length > 0) {
@@ -385,8 +377,13 @@ export class ModelSelectorComponent extends Container {
 			// Load available models (built-in models still work even if models.json failed)
 			try {
 				const availableModels = this.#modelRegistry.getAvailable();
-				models = this.#modelsToItems(availableModels);
-				catalogModels = this.#modelsToItems(this.#modelRegistry.getAll());
+				models = availableModels.map((model: Model) => ({
+					kind: "provider",
+					provider: model.provider,
+					id: model.id,
+					model,
+					selector: `${model.provider}/${model.id}`,
+				}));
 			} catch (error) {
 				this.#allModels = [];
 				this.#filteredModels = [];
@@ -397,22 +394,20 @@ export class ModelSelectorComponent extends Container {
 			}
 		}
 
-		const catalogCandidateModels = (catalogModels ?? models).map(item => item.model);
-		const availableSelectors = new Set(models.map(item => item.selector));
-		const catalogCanonicalRecords = this.#modelRegistry.getCanonicalModels({
-			availableOnly: false,
-			candidates: catalogCandidateModels,
+		const candidateModels = models.map(item => item.model);
+		const canonicalRecords = this.#modelRegistry.getCanonicalModels({
+			availableOnly: this.#scopedModels.length === 0,
+			candidates: candidateModels,
 		});
 		const scopedThinkingBySelector = new Map(models.map(item => [item.selector, item.thinkingLevel]));
-		const canonicalModels = catalogCanonicalRecords
+		const canonicalModels = canonicalRecords
 			.map((record): CanonicalModelItem | undefined => {
 				const selectedModel = this.#modelRegistry.resolveCanonicalModel(record.id, {
-					availableOnly: false,
-					candidates: catalogCandidateModels,
+					availableOnly: this.#scopedModels.length === 0,
+					candidates: candidateModels,
 				});
 				if (!selectedModel) return undefined;
 				const selectedSelector = `${selectedModel.provider}/${selectedModel.id}`;
-				const available = availableSelectors.has(selectedSelector);
 				const searchText = [
 					record.id,
 					record.name,
@@ -430,8 +425,6 @@ export class ModelSelectorComponent extends Container {
 					searchText,
 					normalizedSearchText: normalizeSearchText(searchText),
 					compactSearchText: compactSearchText(searchText),
-					available,
-					setupHint: available ? undefined : this.#getProviderSetupHint(selectedModel.provider),
 				};
 				const scopedThinkingLevel = scopedThinkingBySelector.get(selectedSelector);
 				if (scopedThinkingLevel !== undefined) {
@@ -450,57 +443,15 @@ export class ModelSelectorComponent extends Container {
 
 		this.#allModels = models;
 		this.#filteredModels = models;
-		this.#canonicalModels = canonicalModels.filter(item => item.available);
-		this.#filteredCanonicalModels = this.#canonicalModels;
+		this.#canonicalModels = canonicalModels;
+		this.#filteredCanonicalModels = canonicalModels;
 		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, models.length - 1));
-	}
-
-	#modelsToItems(models: readonly Model[], availableSelectors?: ReadonlySet<string>): ModelItem[] {
-		return models.map((model: Model) => {
-			const selector = `${model.provider}/${model.id}`;
-			const available = availableSelectors?.has(selector);
-			return {
-				kind: "provider",
-				provider: model.provider,
-				id: model.id,
-				model,
-				selector,
-				available,
-				setupHint: available === false ? this.#getProviderSetupHint(model.provider) : undefined,
-			};
-		});
-	}
-
-	#getProviderSetupHint(providerId: string): string | undefined {
-		const providerModel = this.#modelRegistry.getAll().find(model => model.provider === providerId);
-		if (providerModel && !this.#modelRegistry.hasConfiguredAuth(providerModel)) {
-			return `Configure ${providerId} credentials to use this model.`;
-		}
-		const state = this.#modelRegistry.getProviderDiscoveryState(providerId);
-		if (state?.status === "unauthenticated") {
-			return `Authenticate ${providerId} to discover and use models.`;
-		}
-		return undefined;
-	}
-
-	#getProviderCatalogItems(providerId: string): ModelItem[] {
-		if (this.#scopedModels.length > 0) {
-			return this.#allModels.filter(item => item.provider === providerId);
-		}
-		const availableSelectors = new Set(this.#allModels.map(item => item.selector));
-		return this.#modelsToItems(
-			this.#modelRegistry.getAll().filter(model => model.provider === providerId),
-			availableSelectors,
-		);
 	}
 
 	#buildProviderTabs(): void {
 		const activeTabId = this.#getActiveTab().id;
 		const providerSet = new Set<string>();
 		for (const item of this.#allModels) {
-			providerSet.add(item.provider);
-		}
-		for (const item of this.#modelRegistry.getAll()) {
 			providerSet.add(item.provider);
 		}
 		for (const provider of this.#modelRegistry.getDiscoverableProviders()) {
@@ -563,60 +514,32 @@ export class ModelSelectorComponent extends Container {
 		return this.#getActiveTabId() === CANONICAL_TAB;
 	}
 
-	#isShowingCanonicalList(): boolean {
-		return this.#isCanonicalTab() && this.#filteredCanonicalModels.length > 0;
-	}
-
 	#filterModels(query: string): void {
+		const activeTabId = this.#getActiveTabId();
 		const activeProviderId = this.#getActiveProviderId();
-		const hasQuery = query.trim().length > 0;
+		const isCanonicalTab = activeTabId === CANONICAL_TAB;
 
 		// Start with all models or filter by provider/canonical view
 		let baseModels = this.#allModels;
-		let baseCanonicalModels = this.#canonicalModels;
+		const baseCanonicalModels = this.#canonicalModels;
 		if (activeProviderId) {
-			baseModels = this.#getProviderCatalogItems(activeProviderId);
-		}
-		if (hasQuery && this.#scopedModels.length === 0) {
-			const searchAvailableSelectors = new Set(this.#allModels.map(item => item.selector));
-			baseModels = this.#modelsToItems(this.#modelRegistry.getAll(), searchAvailableSelectors);
-			baseCanonicalModels = this.#modelRegistry
-				.getCanonicalModels({ availableOnly: false, candidates: baseModels.map(item => item.model) })
-				.map((record): CanonicalModelItem | undefined => {
-					const selectedModel = this.#modelRegistry.resolveCanonicalModel(record.id, {
-						availableOnly: false,
-						candidates: baseModels.map(item => item.model),
-					});
-					if (!selectedModel) return undefined;
-					const selectedSelector = `${selectedModel.provider}/${selectedModel.id}`;
-					const available = this.#allModels.some(item => item.selector === selectedSelector);
-					const searchText = [
-						record.id,
-						record.name,
-						selectedModel.provider,
-						selectedModel.id,
-						selectedModel.name,
-						...record.variants.flatMap(variant => [variant.selector, variant.model.name]),
-					].join(" ");
-					return {
-						kind: "canonical",
-						id: record.id,
-						model: selectedModel,
-						selector: record.id,
-						variantCount: record.variants.length,
-						searchText,
-						normalizedSearchText: normalizeSearchText(searchText),
-						compactSearchText: compactSearchText(searchText),
-						available,
-						setupHint: available ? undefined : this.#getProviderSetupHint(selectedModel.provider),
-					};
-				})
-				.filter((item): item is CanonicalModelItem => item !== undefined);
+			baseModels = this.#allModels.filter(m => m.provider === activeProviderId);
 		}
 
 		// Apply fuzzy filter if query is present
-		if (hasQuery) {
-			if (this.#isCanonicalTab()) {
+		if (query.trim()) {
+			// If user is searching from a provider tab, auto-switch to ALL to show global provider results.
+			if (activeProviderId && !isCanonicalTab) {
+				this.#activeTabIndex = 0;
+				if (this.#tabBar && this.#tabBar.getActiveIndex() !== 0) {
+					this.#tabBar.setActiveIndex(0);
+					return;
+				}
+				this.#updateTabBar();
+				baseModels = this.#allModels;
+			}
+
+			if (isCanonicalTab) {
 				const alphaTokens = getAlphaSearchTokens(query);
 				const alphaFiltered =
 					alphaTokens.length === 0
@@ -648,9 +571,7 @@ export class ModelSelectorComponent extends Container {
 			this.#filteredCanonicalModels = baseCanonicalModels;
 		}
 
-		const visibleCount = this.#isShowingCanonicalList()
-			? this.#filteredCanonicalModels.length
-			: this.#filteredModels.length;
+		const visibleCount = isCanonicalTab ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
 		this.#selectedIndex = Math.min(this.#selectedIndex, Math.max(0, visibleCount - 1));
 		this.#updateList();
 	}
@@ -696,10 +617,6 @@ export class ModelSelectorComponent extends Container {
 		if (!state) {
 			return undefined;
 		}
-		const providerModel = this.#modelRegistry.getAll().find(model => model.provider === activeProviderId);
-		if (providerModel && !this.#modelRegistry.hasConfiguredAuth(providerModel)) {
-			return `  ${activeProviderId} requires credentials. Press Enter on a setup item or use /provider login ${activeProviderId}.`;
-		}
 		const age = this.#formatDiscoveryAge(state.fetchedAt);
 		switch (state.status) {
 			case "cached":
@@ -724,7 +641,7 @@ export class ModelSelectorComponent extends Container {
 
 	#updateList(): void {
 		this.#listContainer.clear();
-		const isCanonicalTab = this.#isShowingCanonicalList();
+		const isCanonicalTab = this.#isCanonicalTab();
 		const visibleItems = isCanonicalTab ? this.#filteredCanonicalModels : this.#filteredModels;
 
 		const maxVisible = 10;
@@ -821,10 +738,6 @@ export class ModelSelectorComponent extends Container {
 			this.#listContainer.addChild(
 				new Text(theme.fg("muted", `  Model Name: ${selected.model.name}${suffix}`), 0, 0),
 			);
-			const setupHint = "setupHint" in selected ? selected.setupHint : undefined;
-			if (setupHint) {
-				this.#listContainer.addChild(new Text(theme.fg("warning", `  ${setupHint}`), 0, 0));
-			}
 			if (this.#pendingThinkingChoice) {
 				this.#renderThinkingMenu(this.#pendingThinkingChoice);
 			} else if (this.#pendingActionItem) {
@@ -871,7 +784,7 @@ export class ModelSelectorComponent extends Container {
 	}
 
 	#getSelectedItem(): ModelItem | CanonicalModelItem | undefined {
-		return this.#isShowingCanonicalList()
+		return this.#isCanonicalTab()
 			? this.#filteredCanonicalModels[this.#selectedIndex]
 			: this.#filteredModels[this.#selectedIndex];
 	}
@@ -893,9 +806,7 @@ export class ModelSelectorComponent extends Container {
 
 		// Up arrow - navigate list (wrap to bottom when at top)
 		if (matchesKey(keyData, "up")) {
-			const itemCount = this.#isShowingCanonicalList()
-				? this.#filteredCanonicalModels.length
-				: this.#filteredModels.length;
+			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
 			if (itemCount === 0) return;
 			this.#selectedIndex = this.#selectedIndex === 0 ? itemCount - 1 : this.#selectedIndex - 1;
 			this.#updateList();
@@ -904,9 +815,7 @@ export class ModelSelectorComponent extends Container {
 
 		// Down arrow - navigate list (wrap to top when at bottom)
 		if (matchesKey(keyData, "down")) {
-			const itemCount = this.#isShowingCanonicalList()
-				? this.#filteredCanonicalModels.length
-				: this.#filteredModels.length;
+			const itemCount = this.#isCanonicalTab() ? this.#filteredCanonicalModels.length : this.#filteredModels.length;
 			if (itemCount === 0) return;
 			this.#selectedIndex = this.#selectedIndex === itemCount - 1 ? 0 : this.#selectedIndex + 1;
 			this.#updateList();
@@ -1007,13 +916,6 @@ export class ModelSelectorComponent extends Container {
 		role: GjcModelAssignmentTargetId | null,
 		thinkingLevel?: ThinkingLevel,
 	): void {
-		if (item.available === false) {
-			if (this.#onLoginProviderCallback) {
-				void this.#onLoginProviderCallback(item.model.provider);
-			}
-			return;
-		}
-
 		const itemThinkingLevel = thinkingLevel ?? item.thinkingLevel;
 		const hasExplicitThinkingChoice = thinkingLevel !== undefined || item.explicitThinkingLevel === true;
 		if (!hasExplicitThinkingChoice && requiresExplicitThinkingChoice(item.model)) {

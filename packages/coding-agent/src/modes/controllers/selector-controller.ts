@@ -477,10 +477,7 @@ export class SelectorController {
 					done();
 					this.ctx.ui.requestRender();
 				},
-				{
-					...options,
-					onLoginProvider: providerId => this.#handleOAuthLogin(providerId),
-				},
+				options,
 			);
 			return { component: selector, focus: selector };
 		});
