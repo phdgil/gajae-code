@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-28
+
+### Changed
+
+- Released the current dev branch fixes with refreshed 0.1.3 package metadata.
+
 ## [0.1.2] - 2026-05-28
 
 ### Changed
