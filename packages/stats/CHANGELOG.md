@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Refreshed stats package metadata for the GJC 0.2.2 release.
+
 ## [0.2.1] - 2026-05-30
 
 ### Changed
