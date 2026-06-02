@@ -11,6 +11,7 @@ import type { OAuthController, OAuthCredentials } from "@gajae-code/ai/utils/oau
 
 const DEFAULT_PORT = 3000;
 const CALLBACK_PATH = "/callback";
+const CALLBACK_BIND_HOSTNAME = "127.0.0.1";
 
 function isLoopbackHostname(hostname: string): boolean {
 	return hostname === "localhost" || hostname === "127.0.0.1";
@@ -42,7 +43,7 @@ function getUriPort(uri: URL): number {
 
 function validateRedirectConfig(config: MCPOAuthConfig, redirectUri: string | undefined): void {
 	const parsed = parseRedirectUri(redirectUri);
-	if (!parsed || parsed.protocol !== "https:" || !isLoopbackHostname(parsed.hostname)) {
+	if (parsed?.protocol !== "https:" || !isLoopbackHostname(parsed.hostname)) {
 		return;
 	}
 
@@ -63,7 +64,7 @@ function resolveCallbackPort(callbackPort: number | undefined, redirectUri: stri
 	if (callbackPort !== undefined) return callbackPort;
 
 	const parsed = parseRedirectUri(redirectUri);
-	if (!parsed || parsed.protocol !== "http:" || !isLoopbackHostname(parsed.hostname)) {
+	if (parsed?.protocol !== "http:" || !isLoopbackHostname(parsed.hostname)) {
 		return DEFAULT_PORT;
 	}
 
@@ -93,6 +94,7 @@ function resolveCallbackOptions(config: MCPOAuthConfig): OAuthCallbackFlowOption
 		preferredPort: resolveCallbackPort(config.callbackPort, redirectUri),
 		callbackPath: resolveCallbackPath(config.callbackPath, redirectUri),
 		callbackHostname: resolveCallbackHostname(redirectUri),
+		callbackBindHostname: CALLBACK_BIND_HOSTNAME,
 		redirectUri,
 	};
 }

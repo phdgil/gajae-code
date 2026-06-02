@@ -23,6 +23,8 @@ export interface OAuthCallbackFlowOptions {
 	preferredPort: number;
 	callbackPath?: string;
 	callbackHostname?: string;
+	/** Local listener hostname; defaults to callbackHostname when omitted. */
+	callbackBindHostname?: string;
 	/** Exact redirect URI advertised to the provider; disables port fallback. */
 	redirectUri?: string;
 }
@@ -35,6 +37,7 @@ export abstract class OAuthCallbackFlow {
 	preferredPort: number;
 	callbackPath: string;
 	callbackHostname: string;
+	callbackBindHostname: string;
 	redirectUri?: string;
 	#callbackResolve?: (result: CallbackResult) => void;
 	#callbackReject?: (error: string) => void;
@@ -49,12 +52,14 @@ export abstract class OAuthCallbackFlow {
 			this.preferredPort = preferredPortOrOptions;
 			this.callbackPath = callbackPath;
 			this.callbackHostname = DEFAULT_HOSTNAME;
+			this.callbackBindHostname = DEFAULT_HOSTNAME;
 			return;
 		}
 
 		this.preferredPort = preferredPortOrOptions.preferredPort;
 		this.callbackPath = preferredPortOrOptions.callbackPath ?? CALLBACK_PATH;
 		this.callbackHostname = preferredPortOrOptions.callbackHostname ?? DEFAULT_HOSTNAME;
+		this.callbackBindHostname = preferredPortOrOptions.callbackBindHostname ?? this.callbackHostname;
 		this.redirectUri = preferredPortOrOptions.redirectUri;
 	}
 
@@ -144,7 +149,7 @@ export abstract class OAuthCallbackFlow {
 	 */
 	#createServer(port: number, expectedState: string): Bun.Server<unknown> {
 		return Bun.serve({
-			hostname: this.callbackHostname,
+			hostname: this.callbackBindHostname,
 			port,
 			reusePort: false,
 			fetch: req => this.#handleCallback(req, expectedState),

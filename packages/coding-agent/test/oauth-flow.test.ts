@@ -271,6 +271,7 @@ describe("mcp oauth flow", () => {
 
 	it("listens on the implied port for exact HTTP loopback redirectUri values", async () => {
 		const serveSpy = vi.spyOn(Bun, "serve").mockImplementation(options => {
+			expect(options.hostname).toBe("127.0.0.1");
 			expect(options.port).toBe(80);
 			throw new Error("EADDRINUSE");
 		});
@@ -292,6 +293,7 @@ describe("mcp oauth flow", () => {
 
 	it("listens on the explicit port for exact HTTP loopback redirectUri values", async () => {
 		const serveSpy = vi.spyOn(Bun, "serve").mockImplementation(options => {
+			expect(options.hostname).toBe("127.0.0.1");
 			expect(options.port).toBe(3000);
 			throw new Error("EADDRINUSE");
 		});
@@ -312,7 +314,8 @@ describe("mcp oauth flow", () => {
 	});
 
 	it("fails instead of falling back to a random port when redirectUri is exact", async () => {
-		vi.spyOn(Bun, "serve").mockImplementation(() => {
+		const serveSpy = vi.spyOn(Bun, "serve").mockImplementation(options => {
+			expect(options.hostname).toBe("127.0.0.1");
 			throw new Error("EADDRINUSE");
 		});
 
@@ -328,6 +331,7 @@ describe("mcp oauth flow", () => {
 		);
 
 		await expect(flow.login()).rejects.toThrow("cannot fall back to a random port when oauth.redirectUri is set");
+		expect(serveSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("exposes the dynamically registered client_id and client_secret after generateAuthUrl", async () => {
