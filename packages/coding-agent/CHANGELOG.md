@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-06-09
+
 ### Changed
 
 - Added conservative `timeout-minutes` values to all CI workflow jobs to prevent indefinite hangs.

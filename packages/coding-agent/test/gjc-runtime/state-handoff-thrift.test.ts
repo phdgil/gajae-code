@@ -199,10 +199,13 @@ describe("CONSUMER/KEY-FIELD MATRIX for compact handoff payloads", () => {
 			root,
 		);
 		expect(checkpoint.status).toBe(0);
-		expect(checkpoint.stdout).toContain("goal-id=G001");
-		expect(checkpoint.stdout).toContain("status=blocked");
+		expect(checkpoint.stdout).toContain("Checkpointed G001 as blocked");
+		expect(checkpoint.stdout).toContain(
+			"Blocked ultragoal work must be resolved with explicit blocker work or steering before final completion.",
+		);
 		expect(checkpoint.stdout).toMatchInlineSnapshot(`
-		  "ultragoal checkpoint goal-id=G001 status=blocked
+		  "Checkpointed G001 as blocked.
+		  Blocked ultragoal work must be resolved with explicit blocker work or steering before final completion.
 		  "
 		`);
 
