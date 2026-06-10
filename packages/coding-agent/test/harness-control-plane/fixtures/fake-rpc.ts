@@ -35,11 +35,15 @@ function handle(line: string): void {
 		);
 	} else if (frame.type === "prompt") {
 		process.stdout.write(`${JSON.stringify({ type: "response", id: frame.id, command: "prompt", success: true })}\n`);
-		process.stdout.write(`${JSON.stringify({ type: "agent_start" })}\n`);
 		// Emit a realistic tool turn so the owner can surface tool-call -> completed.
-		const w = (f: Record<string, unknown>): void => {
-			process.stdout.write(`${JSON.stringify(f)}\n`);
+		// Session events are delivered ONLY as canonical agent-wire `event` frames
+		// ({ type:"event", payload:{ event_type, event } }) — the same shape real
+		// `gjc --mode rpc` emits and the only shape observeRpcOutboundFrame maps to
+		// owner signals (see docs/rpc.md and rpc-mode.ts).
+		const w = (event: Record<string, unknown>): void => {
+			process.stdout.write(`${JSON.stringify({ type: "event", payload: { event_type: event.type, event } })}\n`);
 		};
+		w({ type: "agent_start" });
 		if (process.env.GJC_FAKE_RPC_STORM === "1") {
 			for (let i = 0; i < 200; i++) w({ type: "message_update", messageId: "m1", delta: "noise" });
 		}
