@@ -28,6 +28,15 @@ function makeTool(name: string, description?: string, parameters?: Record<string
 
 const BUILD_OPTS = { intentTracing: false } as const;
 
+function expectContextSnapshot(
+	result: { systemPrompt?: string[]; tools?: Tool[] },
+	expectedPrompt: string,
+	expectedTool: string,
+): void {
+	expect(result.systemPrompt).toEqual([expectedPrompt]);
+	expect(result.tools?.[0]?.name).toBe(expectedTool);
+}
+
 // ---------------------------------------------------------------------------
 // StablePrefix
 // ---------------------------------------------------------------------------
@@ -390,6 +399,58 @@ describe("AppendOnlyContextManager", () => {
 		expect(tool!.description).toBe("");
 	});
 
+	it("reuses prefix snapshot for unchanged source array identities", () => {
+		const mgr = new AppendOnlyContextManager();
+		const ctx = makeContext({ systemPrompt: ["Stable"], tools: [makeTool("read")] });
+
+		mgr.build(ctx, BUILD_OPTS);
+		const version = mgr.prefix.version;
+		const fingerprint = mgr.prefix.fingerprint;
+
+		const result = mgr.build(ctx, BUILD_OPTS);
+		expectContextSnapshot(result, "Stable", "read");
+		expect(mgr.prefix.version).toBe(version);
+		expect(mgr.prefix.fingerprint).toBe(fingerprint);
+	});
+
+	it("rebuilds when same source identities are mutated in place", () => {
+		const mgr = new AppendOnlyContextManager();
+		const ctx = makeContext({ systemPrompt: ["Stable"], tools: [makeTool("read", "Read files")] });
+		mgr.build(ctx, BUILD_OPTS);
+
+		ctx.systemPrompt[0] = "Mutated";
+		(ctx.tools![0] as AgentTool).description = "Mutated tool";
+		const result = mgr.build(ctx, BUILD_OPTS);
+
+		expectContextSnapshot(result, "Mutated", "read");
+		expect(result.tools![0]!.description).toBe("Mutated tool");
+		expect(mgr.prefix.version).toBe(2);
+	});
+
+	it("invalidates prefix identity cache when systemPrompt array identity changes", () => {
+		const mgr = new AppendOnlyContextManager();
+		const ctx = makeContext({ systemPrompt: ["Old"], tools: [makeTool("read")] });
+		mgr.build(ctx, BUILD_OPTS);
+
+		const next = makeContext({ systemPrompt: ["New"], tools: ctx.tools });
+		const result = mgr.build(next, BUILD_OPTS);
+
+		expectContextSnapshot(result, "New", "read");
+		expect(mgr.prefix.version).toBe(2);
+	});
+
+	it("invalidates prefix identity cache when tools array identity changes", () => {
+		const mgr = new AppendOnlyContextManager();
+		const ctx = makeContext({ systemPrompt: ["Stable"], tools: [makeTool("read")] });
+		mgr.build(ctx, BUILD_OPTS);
+
+		const next = makeContext({ systemPrompt: ctx.systemPrompt, tools: [makeTool("write")] });
+		const result = mgr.build(next, BUILD_OPTS);
+
+		expectContextSnapshot(result, "Stable", "write");
+		expect(mgr.prefix.version).toBe(2);
+	});
+
 	it("tools returned from build are frozen in the cache", () => {
 		const mgr = new AppendOnlyContextManager();
 		const ctx = makeContext({ tools: [makeTool("read")] });
@@ -667,6 +728,65 @@ describe("message sync", () => {
 		const msgs = mgr.build(makeContext(), BUILD_OPTS).messages;
 		expect(msgs).toHaveLength(1);
 		expect(msgs[0]!.content).toBe("world");
+	});
+
+	it("detects rewrites to every JSON-serialized message field", () => {
+		const cases: Array<[string, (message: Record<string, unknown>) => void]> = [
+			["role", message => (message.role = "assistant")],
+			["content", message => (message.content = "changed")],
+			["toolCalls", message => (message.toolCalls = [{ id: "tc2", name: "write" }])],
+			[
+				"tool_calls",
+				message => (message.tool_calls = [{ id: "tc2", type: "function", function: { name: "write" } }]),
+			],
+			["tool_call_id", message => (message.tool_call_id = "call-2")],
+			["name", message => (message.name = "write")],
+			["id", message => (message.id = "msg-2")],
+			["providerPayload", message => (message.providerPayload = { wire: "changed" })],
+			["toolCallId", message => (message.toolCallId = "camel-2")],
+			["toolName", message => (message.toolName = "write")],
+			["isError", message => (message.isError = true)],
+			["api", message => (message.api = "responses")],
+			["provider", message => (message.provider = "anthropic")],
+			["model", message => (message.model = "changed-model")],
+			["stopReason", message => (message.stopReason = "tool_use")],
+			["attribution", message => (message.attribution = { source: "changed" })],
+			["responseId", message => (message.responseId = "resp-2")],
+		];
+
+		for (const [field, mutate] of cases) {
+			const mgr = new AppendOnlyContextManager();
+			mgr.build(makeContext(), BUILD_OPTS);
+			const message: Record<string, unknown> = {
+				role: "user",
+				content: "original",
+				toolCalls: [{ id: "tc1", name: "read" }],
+				tool_calls: [{ id: "tc1", type: "function", function: { name: "read" } }],
+				tool_call_id: "call-1",
+				name: "read",
+				id: "msg-1",
+				providerPayload: { wire: "original" },
+				toolCallId: "camel-1",
+				toolName: "read",
+				isError: false,
+				api: "chat",
+				provider: "openai",
+				model: "original-model",
+				stopReason: "stop",
+				attribution: { source: "original" },
+				responseId: "resp-1",
+			};
+			const messages = [message] as unknown as Message[];
+			mgr.syncMessages(messages);
+
+			const changedMessage = JSON.parse(JSON.stringify(message)) as Record<string, unknown>;
+			mutate(changedMessage);
+			mgr.syncMessages([changedMessage] as unknown as Message[]);
+
+			expect(
+				(mgr.build(makeContext(), BUILD_OPTS).messages[0] as unknown as Record<string, unknown>)[field],
+			).toEqual(changedMessage[field]);
+		}
 	});
 
 	it("no-op when content unchanged", () => {

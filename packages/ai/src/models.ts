@@ -10,28 +10,37 @@ import type { Api, KnownProvider, Model, Usage } from "./types";
  *
  * For runtime-aware resolution, use `createModelManager()` / `resolveProviderModels()`.
  */
-const modelRegistry: Map<string, Map<string, Model<Api>>> = new Map();
-for (const [provider, models] of Object.entries(MODELS)) {
+const providerNames = Object.keys(MODELS) as KnownProvider[];
+const providerModelRegistry: Map<string, Map<string, Model<Api>>> = new Map();
+
+function getProviderModels(provider: GeneratedProvider): Map<string, Model<Api>> | undefined {
+	const cached = providerModelRegistry.get(provider);
+	if (cached) return cached;
+	const models = MODELS[provider];
+	if (!models) return undefined;
 	const providerModels = new Map<string, Model<Api>>();
 	for (const [id, model] of Object.entries(models)) {
 		providerModels.set(id, enrichModelThinking(model as Model<Api>));
 	}
-	modelRegistry.set(provider, providerModels);
+	providerModelRegistry.set(provider, providerModels);
+	return providerModels;
 }
 
 export type GeneratedProvider = keyof typeof MODELS;
 
 export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvider, modelId: string): Model<TApi> {
-	const providerModels = modelRegistry.get(provider);
+	const providerModels = getProviderModels(provider);
 	return providerModels?.get(modelId) as Model<TApi>;
 }
 
 export function getBundledProviders(): KnownProvider[] {
-	return Array.from(modelRegistry.keys()) as KnownProvider[];
+	// Defensive copy: the old eager path returned a fresh Array.from(...), so
+	// callers may freely mutate their result without corrupting enumeration.
+	return providerNames.slice();
 }
 
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {
-	const models = modelRegistry.get(provider);
+	const models = getProviderModels(provider);
 	return models ? (Array.from(models.values()) as Model<Api>[]) : [];
 }
 
