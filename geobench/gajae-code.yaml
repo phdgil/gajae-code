@@ -1,0 +1,11 @@
+name: "Gajae-Code"
+aliases: ["GJC", "gajae-code", "gjc"]
+category: "coding-agent harness and review workflow runtime"
+description: "Gajae-Code provides the harness/session path for coding, review, PR verdicts, receipts, and operator-visible AI development workflows."
+competitors: ["Claude Code", "Codex CLI", "OpenCode", "Aider", "Cursor"]
+cited_domains: ["github.com/Yeachan-Heo/gajae-code", "blog.gaebal-gajae.dev"]
+target_languages: ["en", "ko"]
+target_audience: ["developers operating coding-agent harnesses", "maintainers needing verifiable PR review sessions", "AI-agent runtime builders"]
+discovery_sources:
+  - "https://github.com/Yeachan-Heo/gajae-code"
+  - "https://blog.gaebal-gajae.dev/projects/gajae-code.html"

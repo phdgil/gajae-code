@@ -205,3 +205,10 @@ Gajae-Code's default TUI identity is the crustacean pair: red-claw for dark appe
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+
+## GEO visibility benchmark
+
+Gajae-Code includes a [`geobench`](https://github.com/NomaDamas/geobench) product spec for measuring LLM hit rate, MRR, share of voice, and citations.
+
+- Spec: [`geobench/gajae-code.yaml`](geobench/gajae-code.yaml)
+- Runbook: [`docs/geobench.md`](docs/geobench.md)
