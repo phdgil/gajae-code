@@ -23,6 +23,7 @@ import {
 	buildGjcTmuxUntaggedSessionHint,
 	GJC_TMUX_PROFILE_OPTION,
 	GJC_TMUX_PROFILE_VALUE,
+	readGjcTmuxOwnershipSidecar,
 	resolveGjcTmuxCommand,
 } from "./tmux-common";
 
@@ -1842,6 +1843,7 @@ function readCurrentTmuxLeaderContext(tmuxCommand: string, env: NodeJS.ProcessEn
 	const [sessionName = "", windowIndex = ""] = sessionAndWindow.split(":");
 	if (!sessionName || !windowIndex || !leaderPaneId.startsWith("%"))
 		throw new Error(buildTeamTmuxLeaderRequirementMessage(`invalid_tmux_context:${result.stdout.toString().trim()}`));
+	const ownershipSidecar = readGjcTmuxOwnershipSidecar(sessionName, env);
 	if (readGjcTmuxProfileValue(tmuxCommand, sessionName) !== GJC_TMUX_PROFILE_VALUE) {
 		// Self-heal: a pane launched through `gjc --tmux` exports
 		// GJC_TMUX_LAUNCHED=1, but the session can lose (or never receive) the
@@ -1849,8 +1851,9 @@ function readCurrentTmuxLeaderContext(tmuxCommand: string, env: NodeJS.ProcessEn
 		// registry write races. That stranded-but-genuinely-GJC leader pane
 		// previously hard-failed as unmanaged_tmux_session; re-tag it instead.
 		const launchedByGjc = env[GJC_TMUX_LAUNCHED_ENV] === "1";
-		const retagged = launchedByGjc && retagGjcLaunchedTmuxSession(tmuxCommand, sessionName);
-		if (!retagged || readGjcTmuxProfileValue(tmuxCommand, sessionName) !== GJC_TMUX_PROFILE_VALUE)
+		if (launchedByGjc) retagGjcLaunchedTmuxSession(tmuxCommand, sessionName);
+		const profileRecovered = readGjcTmuxProfileValue(tmuxCommand, sessionName) === GJC_TMUX_PROFILE_VALUE;
+		if (!profileRecovered && !ownershipSidecar)
 			throw new Error(
 				buildTeamTmuxLeaderRequirementMessage(
 					`unmanaged_tmux_session:${sessionName} — ${buildGjcTmuxUntaggedSessionHint(tmuxCommand)}`,

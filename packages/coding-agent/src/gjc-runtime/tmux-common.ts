@@ -1,3 +1,7 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 export const GJC_DEFAULT_TMUX_SESSION = "gajae_code";
 export const GJC_TMUX_SESSION_PREFIX = `${GJC_DEFAULT_TMUX_SESSION}_`;
 export const GJC_TMUX_COMMAND_ENV = "GJC_TMUX_COMMAND";
@@ -8,6 +12,7 @@ export const GJC_TMUX_PROFILE_VALUE = "1";
 export const GJC_TMUX_BRANCH_OPTION = "@gjc-branch";
 export const GJC_TMUX_BRANCH_SLUG_OPTION = "@gjc-branch-slug";
 export const GJC_TMUX_PROJECT_OPTION = "@gjc-project";
+export const GJC_TMUX_OWNERSHIP_ROOT_ENV = "GJC_TMUX_OWNERSHIP_ROOT";
 
 export interface GjcTmuxProfileCommand {
 	description: string;
@@ -23,13 +28,25 @@ export interface TmuxCommandResult {
 
 export type TmuxCommandRunner = (args: string[]) => TmuxCommandResult;
 
+export interface GjcTmuxOwnershipSidecar {
+	sessionName: string;
+	createdAt?: string;
+	branch?: string;
+	branchSlug?: string;
+	project?: string;
+	tmuxCommand?: string;
+}
+
 export function envDisabled(value: string | undefined): boolean {
 	const normalized = value?.trim().toLowerCase();
 	return normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no";
 }
 
 export function resolveGjcTmuxCommand(env: NodeJS.ProcessEnv = process.env): string {
-	return env[GJC_TMUX_COMMAND_ENV]?.trim() || env.GJC_TEAM_TMUX_COMMAND?.trim() || "tmux";
+	const explicit = env[GJC_TMUX_COMMAND_ENV]?.trim() || env.GJC_TEAM_TMUX_COMMAND?.trim();
+	if (explicit) return explicit;
+	if (process.platform === "win32" && Bun.which("psmux")) return "psmux";
+	return "tmux";
 }
 
 /**
@@ -51,9 +68,8 @@ export const GJC_TMUX_UNTAGGED_REASON = "gjc_tmux_session_untagged";
 export function buildGjcTmuxUntaggedSessionHint(tmuxCommand: string): string {
 	return (
 		`the active multiplexer "${tmuxCommand}" lists this session but did not return GJC's ${GJC_TMUX_PROFILE_OPTION} ownership tag; ` +
-		"GJC-managed sessions and `gjc team` require a tmux provider that round-trips tmux user options. " +
-		"Alternative multiplexers such as psmux on Windows do not persist user options yet, so the Windows-native psmux path is not fully supported; " +
-		"use real tmux for GJC-managed session and team flows."
+		"GJC-managed sessions and `gjc team` require either a round-tripped tmux user-option tag or a matching GJC ownership sidecar. " +
+		"Sessions created by GJC can be recovered through the sidecar fallback, but foreign multiplexer sessions remain unmanaged until GJC owns them from launch."
 	);
 }
 
@@ -77,6 +93,48 @@ export function buildGjcTmuxSessionSlug(value: string): string {
 
 function randomTmuxSessionSuffix(): string {
 	return Math.random().toString(36).slice(2, 10);
+}
+
+function buildGjcTmuxOwnershipRoot(env: NodeJS.ProcessEnv = process.env): string {
+	return env[GJC_TMUX_OWNERSHIP_ROOT_ENV]?.trim() || path.join(os.tmpdir(), "gjc-tmux-ownership");
+}
+
+function buildGjcTmuxOwnershipFilePath(sessionName: string, env: NodeJS.ProcessEnv = process.env): string {
+	return path.join(buildGjcTmuxOwnershipRoot(env), `${encodeURIComponent(sessionName)}.json`);
+}
+
+export function readGjcTmuxOwnershipSidecar(
+	sessionName: string,
+	env: NodeJS.ProcessEnv = process.env,
+): GjcTmuxOwnershipSidecar | undefined {
+	const filePath = buildGjcTmuxOwnershipFilePath(sessionName, env);
+	if (!fs.existsSync(filePath)) return undefined;
+	try {
+		const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as GjcTmuxOwnershipSidecar;
+		if (parsed?.sessionName !== sessionName) return undefined;
+		return parsed;
+	} catch {
+		return undefined;
+	}
+}
+
+export function persistGjcTmuxOwnershipSidecar(
+	record: GjcTmuxOwnershipSidecar,
+	env: NodeJS.ProcessEnv = process.env,
+): void {
+	const root = buildGjcTmuxOwnershipRoot(env);
+	fs.mkdirSync(root, { recursive: true });
+	fs.writeFileSync(buildGjcTmuxOwnershipFilePath(record.sessionName, env), `${JSON.stringify(record, null, 2)}\n`, "utf8");
+}
+
+export function removeGjcTmuxOwnershipSidecar(sessionName: string, env: NodeJS.ProcessEnv = process.env): void {
+	const filePath = buildGjcTmuxOwnershipFilePath(sessionName, env);
+	if (!fs.existsSync(filePath)) return;
+	try {
+		fs.unlinkSync(filePath);
+	} catch {
+		// Best-effort cleanup only.
+	}
 }
 
 export function buildGjcTmuxSessionName(
