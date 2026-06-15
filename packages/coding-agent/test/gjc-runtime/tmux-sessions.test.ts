@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
-import { buildGjcTmuxExactOptionTarget } from "@gajae-code/coding-agent/gjc-runtime/tmux-common";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+	buildGjcTmuxExactOptionTarget,
+	persistGjcTmuxOwnershipSidecar,
+} from "@gajae-code/coding-agent/gjc-runtime/tmux-common";
 import {
 	listGjcTmuxSessions,
 	removeGjcTmuxSession,
@@ -18,8 +24,10 @@ function spawnResult(exitCode: number, stdout: string, stderr = ""): SpawnSyncRe
 }
 
 describe("GJC tmux session management", () => {
-	afterEach(() => {
+	afterEach(async () => {
 		vi.restoreAllMocks();
+		const ownershipRoot = path.join(os.tmpdir(), "gjc-tmux-session-tests");
+		await fs.rm(ownershipRoot, { recursive: true, force: true });
 	});
 
 	it("lists only GJC-managed tmux sessions", () => {
@@ -62,6 +70,7 @@ describe("GJC tmux session management", () => {
 	});
 
 	it("guards status and remove to GJC-managed sessions", () => {
+		const env = { GJC_TMUX_COMMAND: "tmux" };
 		const calls: string[][] = [];
 		const spawnSyncSpy = spyOn(Bun, "spawnSync") as unknown as SpawnSyncSpy;
 		spawnSyncSpy.mockImplementation((cmd: string[]) => {
@@ -73,9 +82,9 @@ describe("GJC tmux session management", () => {
 			return spawnResult(0, "");
 		});
 
-		expect(statusGjcTmuxSession("gajae_code_work").name).toBe("gajae_code_work");
-		expect(() => statusGjcTmuxSession("unrelated")).toThrow("gjc_tmux_session_not_found:unrelated");
-		expect(removeGjcTmuxSession("gajae_code_work").name).toBe("gajae_code_work");
+		expect(statusGjcTmuxSession("gajae_code_work", env).name).toBe("gajae_code_work");
+		expect(() => statusGjcTmuxSession("unrelated", env)).toThrow("gjc_tmux_session_not_found:unrelated");
+		expect(removeGjcTmuxSession("gajae_code_work", env).name).toBe("gajae_code_work");
 		expect(calls.at(-1)).toEqual(["tmux", "kill-session", "-t", "=gajae_code_work"]);
 	});
 
@@ -111,7 +120,35 @@ describe("GJC tmux session management", () => {
 		expect(() => statusGjcTmuxSession("psmux_session", { GJC_TMUX_COMMAND: "psmux" })).toThrow(
 			"gjc_tmux_session_untagged:psmux_session",
 		);
-		expect(() => statusGjcTmuxSession("psmux_session", { GJC_TMUX_COMMAND: "psmux" })).toThrow(/not fully supported/);
+		expect(() => statusGjcTmuxSession("psmux_session", { GJC_TMUX_COMMAND: "psmux" })).toThrow(/ownership sidecar/);
+	});
+
+	it("recovers a managed session from the ownership sidecar when user options do not round-trip", () => {
+		const env = { GJC_TMUX_COMMAND: "psmux", GJC_TMUX_OWNERSHIP_ROOT: path.join(os.tmpdir(), "gjc-tmux-session-tests") };
+		persistGjcTmuxOwnershipSidecar(
+			{
+				sessionName: "psmux_session",
+				project: "/repo-a",
+				branch: "feature/demo",
+				branchSlug: "feature-demo",
+			},
+			env,
+		);
+		const spawnSyncSpy = spyOn(Bun, "spawnSync") as unknown as SpawnSyncSpy;
+		spawnSyncSpy.mockImplementation((cmd: string[]) => {
+			if (cmd.includes("list-sessions")) {
+				const format = cmd[cmd.indexOf("-F") + 1] ?? "";
+				if (format === "#{session_name}") return spawnResult(0, "psmux_session\n");
+				return spawnResult(0, "psmux_session\t1\t0\t1770000000\t\troot\t0\t\t\t\n");
+			}
+			return spawnResult(0, "");
+		});
+
+		const session = statusGjcTmuxSession("psmux_session", env);
+		expect(session.name).toBe("psmux_session");
+		expect(session.project).toBe("/repo-a");
+		expect(session.branch).toBe("feature/demo");
+		expect(listGjcTmuxSessions(env).map(candidate => candidate.name)).toEqual(["psmux_session"]);
 	});
 
 	it("still reports plain not-found when the multiplexer does not list the session", () => {
@@ -127,6 +164,7 @@ describe("GJC tmux session management", () => {
 	});
 
 	it("queries the profile option with a window-qualified exact target", () => {
+		const env = { GJC_TMUX_COMMAND: "tmux" };
 		const calls: string[][] = [];
 		const spawnSyncSpy = spyOn(Bun, "spawnSync") as unknown as SpawnSyncSpy;
 		spawnSyncSpy.mockImplementation((cmd: string[]) => {
@@ -138,7 +176,7 @@ describe("GJC tmux session management", () => {
 			return spawnResult(0, "");
 		});
 
-		removeGjcTmuxSession("gajae_code_work");
+		removeGjcTmuxSession("gajae_code_work", env);
 
 		const showOptions = calls.find(call => call.includes("show-options"));
 		expect(showOptions).toEqual(["tmux", "show-options", "-qv", "-t", "=gajae_code_work:", "@gjc-profile"]);

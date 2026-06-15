@@ -126,7 +126,7 @@ describe("gjc session command", () => {
 		expect(payload.ok).toBe(false);
 		expect(payload.reason).toBe("gjc_tmux_session_untagged");
 		expect(typeof payload.detail).toBe("string");
-		expect(payload.detail).toContain("not fully supported");
+		expect(payload.detail).toContain("ownership sidecar");
 		expect(payload.detail).not.toContain(" — ");
 	});
 });

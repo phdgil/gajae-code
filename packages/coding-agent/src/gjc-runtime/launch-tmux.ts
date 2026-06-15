@@ -10,6 +10,8 @@ import {
 	GJC_TMUX_MOUSE_ENV,
 	GJC_TMUX_PROFILE_ENV,
 	GJC_TMUX_SESSION_PREFIX,
+	persistGjcTmuxOwnershipSidecar,
+	removeGjcTmuxOwnershipSidecar,
 	type GjcTmuxProfileCommand,
 	resolveGjcTmuxCommand,
 } from "./tmux-common";
@@ -200,8 +202,6 @@ export function buildDefaultTmuxLaunchPlan(context: TmuxLaunchContext): TmuxLaun
 	const policy = parseLaunchPolicy(env);
 	if (!context.parsed.tmux || policy === "direct") return undefined;
 	if (env.TMUX || env[GJC_TMUX_LAUNCHED_ENV] === "1") return undefined;
-	const platform = context.platform ?? process.platform;
-	if (platform === "win32") return undefined;
 	const tty = context.tty ?? { stdin: Boolean(process.stdin.isTTY), stdout: Boolean(process.stdout.isTTY) };
 	if (policy === "tmux" && !isInteractiveRootLaunch(context.parsed, tty)) return undefined;
 
@@ -268,6 +268,16 @@ export function launchDefaultTmuxIfNeeded(context: TmuxLaunchContext): boolean {
 	}
 	const created = spawnSync(plan.tmuxCommand, plan.newSessionArgs, options);
 	if (created.exitCode === 0) {
+		persistGjcTmuxOwnershipSidecar(
+			{
+				sessionName: plan.sessionName,
+				branch: plan.branch ?? undefined,
+				branchSlug: plan.branch ? buildGjcTmuxSessionSlug(plan.branch) : undefined,
+				project: plan.project ?? undefined,
+				tmuxCommand: plan.tmuxCommand,
+			},
+			env,
+		);
 		const profile = applyGjcTmuxProfile({
 			tmuxCommand: plan.tmuxCommand,
 			target: plan.sessionName,
@@ -279,6 +289,7 @@ export function launchDefaultTmuxIfNeeded(context: TmuxLaunchContext): boolean {
 		});
 		if (profile.failures.length > 0) {
 			cleanupCreatedTmuxSession(plan, spawnSync, options);
+			removeGjcTmuxOwnershipSidecar(plan.sessionName, env);
 			const failure =
 				profile.failures.find(item => item.command.args.includes("@gjc-profile")) ?? profile.failures[0];
 			(context.diagnosticWriter ?? safeStderrWrite)(

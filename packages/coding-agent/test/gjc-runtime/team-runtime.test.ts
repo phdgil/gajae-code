@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { persistGjcTmuxOwnershipSidecar } from "../../src/gjc-runtime/tmux-common";
 import {
 	claimGjcTeamTask,
 	classifyGjcTeamCheckpointFiles,
@@ -689,6 +690,41 @@ describe("native gjc team runtime", () => {
 
 		const tmuxLog = await Bun.file(path.join(cleanupRoot, "tmux.log")).text();
 		expect(tmuxLog).not.toContain("set-option");
+	});
+
+	it("accepts a GJC-owned leader through the ownership sidecar when tmux tags do not round-trip", async () => {
+		cleanupRoot = await createGitRepo();
+		const fakeTmux = await createFakeTmuxBin(cleanupRoot, { gjcProfile: false });
+		const ownershipRoot = path.join(cleanupRoot, ".tmp-tmux-ownership");
+		persistGjcTmuxOwnershipSidecar(
+			{
+				sessionName: "test-session",
+				project: cleanupRoot,
+				tmuxCommand: fakeTmux,
+			},
+			{ GJC_TMUX_OWNERSHIP_ROOT: ownershipRoot },
+		);
+
+		const snapshot = await startGjcTeam({
+			workerCount: 1,
+			agentType: "executor",
+			task: "Recover managed leader from sidecar",
+			teamName: "sidecar-team",
+			cwd: cleanupRoot,
+			dryRun: false,
+			env: {
+				PATH: process.env.PATH ?? "",
+				GJC_TEAM_WORKER_COMMAND: "true",
+				GJC_TEAM_TMUX_COMMAND: fakeTmux,
+				GJC_TMUX_OWNERSHIP_ROOT: ownershipRoot,
+			},
+		});
+
+		expect(snapshot.team_name).toBe("sidecar-team");
+		expect(snapshot.tmux_target).toBe("test-session:0");
+		const tmuxLog = await Bun.file(path.join(cleanupRoot, "tmux.log")).text();
+		expect(tmuxLog).toContain("show-options -qv -t =test-session: @gjc-profile");
+		expect(tmuxLog).toContain("split-window");
 	});
 
 	it("cleans partial worker worktrees without killing the leader session when pane startup fails", async () => {
