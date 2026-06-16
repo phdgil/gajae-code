@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { safeStderrWrite } from "@gajae-code/utils";
 import type { Args } from "../cli/args";
 import {
 	buildGjcTmuxProfileCommands,
@@ -291,7 +292,7 @@ export function launchDefaultTmuxIfNeeded(context: TmuxLaunchContext): boolean {
 			removeGjcTmuxOwnershipSidecar(plan.sessionName, env);
 			const failure =
 				profile.failures.find(item => item.command.args.includes("@gjc-profile")) ?? profile.failures[0];
-			(context.diagnosticWriter ?? process.stderr.write.bind(process.stderr))(
+			(context.diagnosticWriter ?? safeStderrWrite)(
 				formatTmuxLaunchDiagnostic("profile tagging failed", failure?.stderr),
 			);
 			return true;
@@ -300,8 +301,6 @@ export function launchDefaultTmuxIfNeeded(context: TmuxLaunchContext): boolean {
 	if (created.exitCode !== 0) return false;
 	const attached = spawnSync(plan.tmuxCommand, ["attach-session", "-t", plan.sessionName], options);
 	if (attached.exitCode === 0) return true;
-	(context.diagnosticWriter ?? process.stderr.write.bind(process.stderr))(
-		formatTmuxLaunchDiagnostic("attach failed", attached.stderr),
-	);
+	(context.diagnosticWriter ?? safeStderrWrite)(formatTmuxLaunchDiagnostic("attach failed", attached.stderr));
 	return true;
 }

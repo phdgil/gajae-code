@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import type { Args } from "@gajae-code/coding-agent/cli/args";
 import {
 	applyGjcTmuxProfile,
@@ -20,8 +20,19 @@ function args(overrides: Partial<Args> = {}): Args {
 }
 
 const interactiveTty = { stdin: true, stdout: true };
+const originalStderrWrite = process.stderr.write.bind(process.stderr);
+
+function stderrError(code: string): Error {
+	const error = new Error(`${code} from stderr`);
+	Object.defineProperty(error, "code", { value: code });
+	return error;
+}
 
 describe("default GJC tmux launch", () => {
+	afterEach(() => {
+		process.stderr.write = originalStderrWrite;
+	});
+
 	it("does not plan tmux for interactive root launch without --tmux", () => {
 		const plan = buildDefaultTmuxLaunchPlan({
 			parsed: args({ messages: ["hello world"] }),
@@ -314,6 +325,34 @@ describe("default GJC tmux launch", () => {
 		expect(diagnostics[0].length).toBeLessThan(320);
 	});
 
+	it("does not throw when the default tmux diagnostic write hits a closed stderr", () => {
+		const writes: string[] = [];
+		process.stderr.write = ((chunk: string | Uint8Array) => {
+			writes.push(String(chunk));
+			throw stderrError("EIO");
+		}) satisfies typeof process.stderr.write;
+
+		const handled = launchDefaultTmuxIfNeeded({
+			parsed: args({ tmux: true }),
+			rawArgs: [],
+			cwd: "/repo",
+			env: {},
+			argv: ["/usr/local/bin/gjc"],
+			execPath: "/bin/bun",
+			platform: "darwin",
+			tty: interactiveTty,
+			tmuxAvailable: true,
+			spawnSync: (_command, spawnArgs) => {
+				if (spawnArgs[0] === "attach-session") return { exitCode: 1, stderr: "attach failed" };
+				return { exitCode: 0 };
+			},
+		});
+
+		expect(handled).toBe(true);
+		expect(writes).toHaveLength(1);
+		expect(writes[0]).toStartWith("gjc --tmux failed after creating tmux session: attach failed.");
+	});
+
 	it("falls through to direct launch when tmux is unavailable", () => {
 		const plan = buildDefaultTmuxLaunchPlan({
 			parsed: args({ tmux: true }),
@@ -328,5 +367,60 @@ describe("default GJC tmux launch", () => {
 		});
 
 		expect(plan).toBeUndefined();
+	});
+
+	it("applies session-scoped mouse scrolling when launching tmux on WSL/Linux", () => {
+		const calls: { command: string; args: string[]; options: TmuxSpawnOptions }[] = [];
+		const handled = launchDefaultTmuxIfNeeded({
+			parsed: args({ messages: ["hello world"], tmux: true }),
+			rawArgs: ["--tmux", "hello world"],
+			cwd: "/repo",
+			env: { WSL_DISTRO_NAME: "Ubuntu" },
+			argv: ["bun", "packages/coding-agent/src/cli.ts"],
+			execPath: "/bin/bun",
+			platform: "linux",
+			tty: interactiveTty,
+			tmuxAvailable: true,
+			spawnSync: (command, spawnArgs, options) => {
+				calls.push({ command, args: spawnArgs, options });
+				return { exitCode: 0 };
+			},
+		});
+
+		expect(handled).toBe(true);
+		const created = calls.find(call => call.args[0] === "new-session");
+		expect(created).toBeDefined();
+		const sessionName = created?.args[3] ?? "";
+		expect(sessionName.startsWith(GJC_TMUX_SESSION_PREFIX)).toBe(true);
+		// The GJC-launched tmux/profile path must not bypass mouse scrolling on WSL.
+		expect(calls.some(call => call.command === "tmux")).toBe(true);
+		expect(calls.map(call => call.args)).toContainEqual(["set-option", "-t", sessionName, "mouse", "on"]);
+		// All profile mutations stay scoped to the GJC session, never global tmux state.
+		expect(calls.flatMap(call => call.args)).not.toContain("-g");
+	});
+
+	it("honors GJC_MOUSE=off on WSL/Linux without disabling the rest of the profile", () => {
+		const calls: { command: string; args: string[]; options: TmuxSpawnOptions }[] = [];
+		const handled = launchDefaultTmuxIfNeeded({
+			parsed: args({ messages: ["hello world"], tmux: true }),
+			rawArgs: ["--tmux", "hello world"],
+			cwd: "/repo",
+			env: { WSL_DISTRO_NAME: "Ubuntu", GJC_MOUSE: "off" },
+			argv: ["bun", "packages/coding-agent/src/cli.ts"],
+			execPath: "/bin/bun",
+			platform: "linux",
+			tty: interactiveTty,
+			tmuxAvailable: true,
+			spawnSync: (command, spawnArgs, options) => {
+				calls.push({ command, args: spawnArgs, options });
+				return { exitCode: 0 };
+			},
+		});
+
+		expect(handled).toBe(true);
+		const created = calls.find(call => call.args[0] === "new-session");
+		const sessionName = created?.args[3] ?? "";
+		expect(calls.flatMap(call => call.args)).not.toContain("mouse");
+		expect(calls.map(call => call.args)).toContainEqual(["set-option", "-t", sessionName, "@gjc-profile", "1"]);
 	});
 });
