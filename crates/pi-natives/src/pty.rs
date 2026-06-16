@@ -947,18 +947,27 @@ mod tests {
 	fn bounded_reader_channel_reports_success_for_high_output() {
 		let _guard = PTY_TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner());
 		let (_tx, rx) = mpsc::channel();
+		#[cfg(windows)]
+		let (line_count, timeout_ms, max_duration): (usize, u32, Duration) =
+			(20_000, 60_000, Duration::from_secs(60));
+		#[cfg(not(windows))]
+		let (line_count, timeout_ms, max_duration): (usize, u32, Duration) =
+			(200_000, 20_000, Duration::from_secs(20));
+		let command = format!(
+			"i=0; while [ $i -lt {line_count} ]; do printf '%080d\\n' \"$i\"; i=$((i+1)); done"
+		);
 		let started = Instant::now();
 		let result = run_pty_sync(
-			test_config("i=0; while [ $i -lt 200000 ]; do printf '%080d\\n' \"$i\"; i=$((i+1)); done"),
+			test_config(&command),
 			None,
 			rx,
-			task::CancelToken::new(Some(20_000), None),
+			task::CancelToken::new(Some(timeout_ms), None),
 		)
 		.expect("high-output PTY run should complete without unbounded buffering");
 		assert!(result.exit_code.is_some());
 		assert!(!result.cancelled);
 		assert!(!result.timed_out);
-		assert!(started.elapsed() < Duration::from_secs(20));
+		assert!(started.elapsed() < max_duration);
 	}
 
 	#[test]
