@@ -48,6 +48,8 @@ Inspired by the [Ouroboros project](https://github.com/Q00/ouroboros) which demo
 - Score ambiguity after every answer -- display the score transparently
 - When the locked topology has multiple active components, score and target each component explicitly so depth-first clarity on one component cannot hide ambiguity in siblings
 - Keep prompt payloads budgeted: summarize or trim oversized initial context/history before composing question, scoring, spec, or handoff prompts
+- If the next best move is to narrow scope instead of deepening detail, ask a scope-trim question that defers, merges, or selects the must-have v1 slice before continuing
+- When question synthesis starts sprawling, repeating, or overloading the round, degrade gracefully to a short forced-choice question that shrinks active scope before resuming normal depth
 - If the user's initial context is oversized, create a concise prompt-safe summary first and wait for that summary before ambiguity scoring, question generation, or downstream execution handoff
 - Do not proceed to execution until ambiguity ≤ the resolved threshold for this run and the user explicitly approves a scoped execution path
 - Allow early exit with a clear warning if ambiguity is still high
@@ -261,6 +263,8 @@ If any prompt input is too large, summarize it first and then continue from the 
 - When N > 1 active components are tied or similarly weak, rotate targeting across active components rather than asking repeatedly about the last targeted component; update `topology.last_targeted_component_id` after each question
 - Generate a question that specifically improves that component's weakest dimension
 - State, in one sentence before the question, why this component/dimension pair is now the bottleneck to reducing ambiguity
+- **Scope-trim rescue mode:** if 3+ active components remain similarly weak, or the candidate question is long, repetitive, or compound, treat breadth itself as a Constraint Clarity gap and ask which component(s) are truly in v1 versus explicitly deferred
+- In scope-trim rescue mode, prefer one concrete decision, 2-4 answer options plus free-text, minimal rationale, and short question text over elaborate ontology or tradeoff framing
 - Questions should expose ASSUMPTIONS, not gather feature lists
 - **Facts vs decisions:** answer factual questions (current stack, versions, existing patterns, external API limits) from explore/research and present them as cited confirmations; route every *decision* (goals, scope, tradeoffs, desired behavior for new work) to the user. When unsure which a question is, treat it as a decision and ask.
 - If the scope is still conceptually fuzzy (entities keep shifting, the user is naming symptoms, or the core noun is unstable), switch to an ontology-style question that asks what the thing fundamentally IS before returning to feature/detail questions
