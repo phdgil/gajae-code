@@ -100,7 +100,7 @@ Include:
 - **Agent roster**: list each lane/agent id, role, runtime target (`executor`, `architect`, `critic`, or a project `.gjc/agents` entry), model/skill hints, and constraints.
 - **Task lanes**: list each task id, owner agent, dependency or parallel group, inputs, outputs/artifacts, acceptance criteria, and verification evidence.
 - **Execution mode recommendation**: prefer `ultragoal-native-subagents`; recommend `team` only when durable visible tmux workers, worktrees, or long-running manual monitoring are required.
-- **Research/ML decomposition**: for research, data science, or model-training work, explicitly consider prior-art/literature, data audit, experiment design, training implementation, evaluation/metrics, reproducibility/environment, and failure-analysis lanes.
+- **Domain-specific crystallization**: when the task clearly calls for a specialized domain lens, explicitly consider bounded lanes for domain context/evidence, input or asset audit, method/design, implementation or production, evaluation/validation, reproducibility/operability, and failure/risk analysis.
 
 Do not invent unavailable runtime agents as guaranteed targets. When a specialist project agent is absent, map the lane to `executor` and write the specialist responsibility into the assignment. Reserve `architect` and `critic` for review, risk, and challenge lanes unless the project defines a more specific agent.
 
