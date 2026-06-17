@@ -63,6 +63,6 @@ describe("deep-interview skill conflict-aware scoring contract", () => {
 		expect(skill).toContain("confidence_to_plan");
 		expect(skill).toContain("Generic crystallization template");
 		expect(skill).toContain("Domain lens selection");
-		expect(skill).toContain("Do not hardcode research/ML");
+		expect(skill).toContain("Do not hardcode any field-specific crystallization template");
 	});
 });

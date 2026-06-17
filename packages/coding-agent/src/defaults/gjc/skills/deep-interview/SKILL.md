@@ -279,7 +279,7 @@ Deep Interview does not rely on a scalar ambiguity score alone. For every substa
 
 Persist the issue inventory in state with bucket, severity, evidence, affected component/dimension, status, and next-question candidate. Also persist `unresolved_critical_issues`, `unresolved_major_issues`, and `confidence_to_plan` (`low|medium|high`). A low ambiguity score never overrides unresolved critical/major issues.
 
-**Domain lens selection:** Do not hardcode research/ML or any other field-specific crystallization template as the default. Select at most 1-3 optional context lenses only when the user's task clearly calls for them, such as code-change, product/app, automation/operations, document/admin, data/research, design/content, compliance/safety, teaching/training, or procurement/evaluation. Context lenses may add issue buckets and sharper questions, but they cannot replace the generic issue inventory or closure gate.
+**Domain lens selection:** Do not hardcode any field-specific crystallization template as the default. Select at most 1-3 optional context lenses only when the user's task clearly calls for them, such as code-change, product/app, automation/operations, document/admin, data/evidence, design/content, compliance/safety, teaching/training, or procurement/evaluation. Context lenses may add issue buckets and sharper questions, but they cannot replace the generic issue inventory or closure gate.
 
 **Generic crystallization template:** Before handoff, the spec must be able to state these general fields for every active component:
 - objective
@@ -687,7 +687,7 @@ Spec structure:
 
 ## Phase 5: Execution Bridge
 
-**Research workflow override:** if `--research-setup` is active, skip the standard execution options below and write a pending-approval spec that names research setup as an unresolved follow-up. Do not invoke deprecated research workflow shims.
+**Setup workflow override:** if the legacy setup override is active, skip the standard execution options below and write a pending-approval spec that names setup as an unresolved follow-up. Do not invoke deprecated setup workflow shims.
 
 After the spec is written, mark it `pending approval` and present execution options via the `ask` tool. Until the user selects an execution option, the deep-interview module MUST NOT run mutation-oriented shell commands, edit source files, commit, push, open PRs, invoke execution skills, or delegate implementation tasks:
 
@@ -872,7 +872,7 @@ Why bad: 45% ambiguity means nearly half the requirements are unclear. The mathe
 - [ ] Round 0 topology gate completed before scoring; `topology.confirmed_at` persisted
 - [ ] Ambiguity scored and displayed every round, naming the weakest component/dimension target (rotating across active components when N > 1)
 - [ ] Harness-Style Clarity Architecture issue inventory updated every round; low ambiguity did not override unresolved critical/major issues
-- [ ] Domain lens selection stayed optional/contextual; no research/ML or other field-specific template was treated as the default
+- [ ] Domain lens selection stayed optional/contextual; no field-specific template was treated as the default
 - [ ] Lateral panel convened at milestone transitions (and before synthesizing agent-supplied answers) with parallel read-only personas
 - [ ] Free-text answers passed the Refine gate; dialectic rhythm guard forced a user question after 3 agent-resolved answers; any auto-answer threshold crossing explicitly confirmed
 - [ ] Closure / Acceptance Guard and the one-sentence Restate gate both passed before crystallization
