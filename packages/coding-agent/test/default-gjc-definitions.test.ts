@@ -342,7 +342,7 @@ Project executor override body.
 		expect(ralplan).toContain("Agent roster");
 		expect(ralplan).toContain("Task lanes");
 		expect(ralplan).toContain("Execution mode recommendation");
-		expect(ralplan).toContain("Domain-specific crystallization");
+		expect(ralplan).toContain("Domain-specific decomposition");
 		expect(ultragoal).toContain("Harness-Style Execution Architecture Intake");
 		expect(ultragoal).toContain("Task lanes");
 		expect(ultragoal).toContain("native subagents");
