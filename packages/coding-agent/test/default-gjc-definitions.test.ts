@@ -319,6 +319,38 @@ Project executor override body.
 		}
 	});
 
+	it("documents harness-style execution architecture handoff between ralplan and ultragoal", async () => {
+		const ralplan = await Bun.file(
+			path.join(repoRoot, "packages", "coding-agent", "src", "defaults", "gjc", "skills", "ralplan", "SKILL.md"),
+		).text();
+		const ultragoal = await Bun.file(
+			path.join(repoRoot, "packages", "coding-agent", "src", "defaults", "gjc", "skills", "ultragoal", "SKILL.md"),
+		).text();
+
+		expect(ralplan).toContain("Harness-Style Execution Architecture");
+		for (const pattern of [
+			"Pipeline",
+			"Fan-out/Fan-in",
+			"Expert Pool",
+			"Producer-Reviewer",
+			"Supervisor",
+			"Hierarchical Delegation",
+		]) {
+			expect(ralplan).toContain(pattern);
+			expect(ultragoal).toContain(pattern);
+		}
+		expect(ralplan).toContain("Agent roster");
+		expect(ralplan).toContain("Task lanes");
+		expect(ralplan).toContain("Execution mode recommendation");
+		expect(ralplan).toContain("Research/ML decomposition");
+		expect(ultragoal).toContain("Harness-Style Execution Architecture Intake");
+		expect(ultragoal).toContain("Task lanes");
+		expect(ultragoal).toContain("native subagents");
+		expect(ultragoal).toContain("leader owns integration");
+		expect(ultragoal).toContain("Research/ML tasks");
+		expect(ultragoal).toContain("Do not auto-launch Team as a substitute");
+	});
+
 	it("keeps bundled deep-interview skill on GJC-native workflow vocabulary", () => {
 		const deepInterview = getDefaultGjcDefinitions().find(
 			definition => definition.kind === "skill" && definition.name === "deep-interview",
