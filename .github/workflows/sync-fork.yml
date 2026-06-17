@@ -41,10 +41,22 @@ jobs:
       - name: Fetch upstream main
         run: git fetch upstream main
 
-      - name: Fast-forward fork main
+      - name: Check fast-forward eligibility
+        id: fast_forward
         run: |
           git checkout main
+          if git merge-base --is-ancestor HEAD upstream/main; then
+            echo "can_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "can_sync=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Fork main diverged::Skipping automatic sync because fork main has commits that are not in upstream/main. Rebase or merge manually when you want to reconcile upstream changes."
+          fi
+
+      - name: Fast-forward fork main
+        if: steps.fast_forward.outputs.can_sync == 'true'
+        run: |
           git merge --ff-only upstream/main
 
       - name: Push fork main
+        if: steps.fast_forward.outputs.can_sync == 'true'
         run: git push origin main
