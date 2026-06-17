@@ -47,6 +47,8 @@ Inspired by the [Ouroboros project](https://github.com/Q00/ouroboros) which demo
 - For brownfield confirmation questions, cite the repo evidence that triggered the question (file path, symbol, or pattern) instead of asking the user to rediscover it
 - Score ambiguity after every answer -- display the score transparently
 - When the locked topology has multiple active components, score and target each component explicitly so depth-first clarity on one component cannot hide ambiguity in siblings
+- Treat ambiguity as necessary but not sufficient: unresolved critical/major issue buckets from the Harness-Style Clarity Architecture block closure even when ambiguity is at or below threshold
+- Maintain a generic issue inventory, selected context lenses, severity counts, and `confidence_to_plan` before every closure decision
 - Keep prompt payloads budgeted: summarize or trim oversized initial context/history before composing question, scoring, spec, or handoff prompts
 - If the next best move is to narrow scope instead of deepening detail, ask a scope-trim question that defers, merges, or selects the must-have v1 slice before continuing
 - When question synthesis starts sprawling, repeating, or overloading the round, degrade gracefully to a short forced-choice question that shrinks active scope before resuming normal depth
@@ -158,6 +160,11 @@ Deep Interview threshold: <resolvedThresholdPercent> (source: <resolvedThreshold
     "auto_answer_streak": 0,
     "refined_rounds": [],
     "closure_overrides": [],
+    "issue_inventory": [],
+    "selected_domain_lenses": [],
+    "unresolved_critical_issues": 0,
+    "unresolved_major_issues": 0,
+    "confidence_to_plan": "low",
     "restated_goal": null,
     "ambiguity_milestone": "initial",
     "architect_failures": 0
@@ -240,6 +247,50 @@ Options should include contextually relevant choices such as **Looks right**, **
 
 6. **Four-component fixture shape:** For an initial idea such as "Build an intake pipeline that ingests CSVs, normalizes records, provides a detailed reviewer UI with inline comments and approvals, and exports audit-ready reports," Round 0 should surface all four top-level components — `Ingestion`, `Normalization`, `Review UI`, and `Export` — even though `Review UI` is the one detailed component. The detailed `Review UI` component must not collapse or stand in for the less-detailed sibling components. Phase 2 must ask follow-up questions until every active component has sufficient goal/constraint/criteria clarity. Phase 4 must cover each confirmed component in `## Topology` or explicitly list a user-confirmed deferral for that component.
 
+## Harness-Style Clarity Architecture
+
+Deep Interview does not rely on a scalar ambiguity score alone. For every substantial interview, run a lightweight fan-out/fan-in clarity architecture before question generation, after scoring, and during closure. This is a generic issue-discovery layer, not a domain-specific template.
+
+**Default clarity lenses:**
+- `Intent Clarifier`: verifies what outcome the user actually wants, who it is for, and what decision is being made.
+- `Assumption Miner`: surfaces hidden assumptions the current wording depends on.
+- `Constraint Mapper`: checks boundaries, resources, permissions, time, quality bars, and non-goals.
+- `Success-Criteria Auditor`: asks how completion will be recognized and what evidence will prove it.
+- `Risk/Failure Critic`: identifies ways a clear-sounding request can still fail, mislead, or cause rework.
+- `Implementation Realist`: checks whether dependencies, environment, access, sequencing, and maintainability are realistic.
+- `Decision Synthesizer`: converts the highest-severity open issue into the next single question.
+
+**Generic issue buckets:**
+- hidden assumptions
+- undefined success criteria
+- missing constraints
+- missing inputs, resources, access, or authority
+- unclear output or deliverable shape
+- stakeholder, user, or audience ambiguity
+- conflicting goals, priorities, or decisions
+- material risk or uncertainty that can change the plan
+- sounds-specific-but-underspecified risk
+- unresolved non-goals or scope boundaries
+
+**Severity gate:**
+- `critical`: would make the downstream plan unsafe, misleading, or likely wrong; blocks closure.
+- `major`: likely to cause substantial rework or a wrong implementation; blocks closure unless the user explicitly accepts it as a known risk, non-goal, or follow-up.
+- `minor`: record in the spec as a follow-up or watch item; does not block closure by itself.
+
+Persist the issue inventory in state with bucket, severity, evidence, affected component/dimension, status, and next-question candidate. Also persist `unresolved_critical_issues`, `unresolved_major_issues`, and `confidence_to_plan` (`low|medium|high`). A low ambiguity score never overrides unresolved critical/major issues.
+
+**Domain lens selection:** Do not hardcode research/ML or any other field-specific crystallization template as the default. Select at most 1-3 optional context lenses only when the user's task clearly calls for them, such as code-change, product/app, automation/operations, document/admin, data/research, design/content, compliance/safety, teaching/training, or procurement/evaluation. Context lenses may add issue buckets and sharper questions, but they cannot replace the generic issue inventory or closure gate.
+
+**Generic crystallization template:** Before handoff, the spec must be able to state these general fields for every active component:
+- objective
+- stakeholder/user/audience
+- success criteria
+- constraints and non-goals
+- inputs, resources, access, and authority needed
+- output/deliverable format
+- material risks and unresolved uncertainties
+- decision points that were resolved or explicitly deferred
+
 ## Phase 2: Interview Loop
 
 Repeat until `ambiguity ≤ threshold` OR user exits early:
@@ -251,6 +302,7 @@ Build the question generation prompt with:
 - Prior Q&A rounds trimmed or summarized to fit the prompt budget while preserving decisions, constraints, unresolved gaps, and ontology changes
 - Current clarity scores per dimension (which is weakest?)
 - Lateral-review panel findings (if convened this round -- see Phase 3)
+- Current Harness-Style Clarity Architecture issue inventory, including unresolved critical/major buckets, selected domain lenses, and `confidence_to_plan`
 - Brownfield codebase context (if applicable), summarized to cited paths/symbols/patterns instead of raw dumps
 - Locked topology from Round 0, including active components, deferred components, prior per-component scores, and `last_targeted_component_id`
 
@@ -260,8 +312,10 @@ If any prompt input is too large, summarize it first and then continue from the 
 
 **Question targeting strategy:**
 - Identify the active component + dimension pair with the LOWEST clarity score across the locked topology
+- If any unresolved critical or major issue exists in the generic issue inventory, target the highest-severity issue before the weakest numeric dimension; use the weakest dimension only to break ties
 - When N > 1 active components are tied or similarly weak, rotate targeting across active components rather than asking repeatedly about the last targeted component; update `topology.last_targeted_component_id` after each question
 - Generate a question that specifically improves that component's weakest dimension
+- Run the default clarity lenses as a fan-out/fan-in pass before finalizing the question, then let `Decision Synthesizer` choose the single highest-impact question
 - State, in one sentence before the question, why this component/dimension pair is now the bottleneck to reducing ambiguity
 - **Scope-trim rescue mode:** if 3+ active components remain similarly weak, or the candidate question is long, repetitive, or compound, treat breadth itself as a Constraint Clarity gap and ask which component(s) are truly in v1 versus explicitly deferred
 - In scope-trim rescue mode, prefer one concrete decision, 2-4 answer options plus free-text, minimal rationale, and short question text over elaborate ontology or tradeoff framing
@@ -335,6 +389,8 @@ The rise is SILENT: no modal, no forced-resolution step, and no dedicated confli
 
 Structured scorer output is required. Include `triggers`, `trigger_status`, `affected_component`, `affected_dimension`, `prior_dimension_score`, `new_dimension_score`, `prior_ambiguity`, `new_ambiguity`, `evidence`, `contradicted_established_fact` when relevant, and `disputed_unresolved_rationale` when applicable.
 
+Update the Harness-Style Clarity Architecture inventory during scoring. Include `issue_inventory`, `selected_domain_lenses`, `unresolved_critical_issues`, `unresolved_major_issues`, and `confidence_to_plan` in structured output. `confidence_to_plan` may be `high` only when no critical issue remains and no major issue remains unless explicitly accepted by the user as a known risk, non-goal, or follow-up.
+
 Established-facts maintenance: promote stable confirmed decisions into `state.established_facts` with source/evidence; when a new answer contradicts an established fact, mark the fact disputed and preserve the contradicted fact instead of deleting it.
 
 TRANSITION VALIDATION: if a trigger is present, the affected dimension must not improve and overall ambiguity must rise vs the prior scored round, unless the trigger is explicitly marked disputed or unresolved with rationale.
@@ -376,6 +432,11 @@ Also identify:
 - weakest_dimension_rationale: one sentence explaining why this component/dimension pair is the highest-leverage target for the next question
 - component_scores: object keyed by component id, with per-dimension scores and gaps
 - structured_scorer_output: object containing triggers, trigger_status, affected_component, affected_dimension, prior_dimension_score, new_dimension_score, prior_ambiguity, new_ambiguity, evidence, contradicted_established_fact when relevant, and disputed_unresolved_rationale when applicable
+- issue_inventory: array of generic issue-bucket records with bucket, severity, evidence, affected_component, affected_dimension, status, and next_question_candidate
+- selected_domain_lenses: optional context lenses used this round; leave empty when no field-specific lens is clearly warranted
+- unresolved_critical_issues: count
+- unresolved_major_issues: count
+- confidence_to_plan: low, medium, or high
 
 5. Ontology Extraction: Identify all key entities (nouns) discussed in the transcript.
 
@@ -484,7 +545,7 @@ When ambiguity ≤ threshold (or hard cap / early exit):
 
 **Before generating the spec, two gates must pass, in order:**
 
-**4a. Closure / Acceptance Guard.** Even when ambiguity ≤ threshold, do not treat the math as completion. Run an independent readiness audit from the full main-session perspective (including explore findings, established facts, and triggers the scorer may not have fully weighed). Confirm every active topology component has goal/constraint/criteria coverage, no unresolved or disputed trigger remains on a path that matters, and no low-confidence auto-answer is standing in for user-confirmed truth above the clarity cap. If a material gap exists, explicitly override the gate to the user — "The math says ready, but I am not accepting it yet because {gap}" — and ask the single highest-impact follow-up, returning to Phase 2. Record any override in `state.closure_overrides`.
+**4a. Closure / Acceptance Guard.** Even when ambiguity ≤ threshold, do not treat the math as completion. Run an independent readiness audit from the full main-session perspective (including explore findings, established facts, triggers the scorer may not have fully weighed, and the Harness-Style Clarity Architecture issue inventory). Confirm every active topology component has goal/constraint/criteria coverage, no unresolved or disputed trigger remains on a path that matters, no unresolved critical issue remains, no unresolved major issue remains unless the user explicitly accepted it as a known risk/non-goal/follow-up, `confidence_to_plan` is `high`, and no low-confidence auto-answer is standing in for user-confirmed truth above the clarity cap. The generic crystallization template must be fillable for every active component. If a material gap exists, explicitly override the gate to the user — "The math says ready, but I am not accepting it yet because {gap}" — and ask the single highest-impact follow-up, returning to Phase 2. Record any override in `state.closure_overrides`.
 
 **4b. Restate gate.** Once closure passes, collapse the agreed answers into ONE sentence goal that covers every active component, and confirm it with a single `ask`: "If someone read only this line, would they reach the same outcome you have in mind?" Offer **Yes, crystallize**, **Adjust wording**, and **Missing scope**, plus free-text, applying `language.instruction` when present. On "Adjust wording" / "Missing scope", collect the exact correction with one follow-up `ask`, route it back through Step 2c scoring and established-facts maintenance (a correction can change ambiguity), then re-run closure and ask the Restate gate again. Cap at two loops; if alignment is not reached, return to Phase 2 with a targeted question instead of forcing a goal line. Persist the confirmed line as `state.restated_goal`.
 
@@ -518,6 +579,10 @@ Spec structure:
 - Lateral Panel Failures: {lateral_panel_failures}
 - Refined Rounds: {refined_rounds}
 - Closure Overrides: {closure_overrides count, or none}
+- Unresolved Critical Issues: {unresolved_critical_issues}
+- Unresolved Major Issues: {unresolved_major_issues}
+- Confidence to Plan: {confidence_to_plan}
+- Selected Domain Lenses: {selected_domain_lenses}
 - Restated Goal: {restated_goal}
 
 ## Clarity Breakdown
@@ -536,6 +601,20 @@ Spec structure:
 | Component | Status | Description | Coverage / Deferral Note |
 |-----------|--------|-------------|--------------------------|
 | {component.name} | {active|deferred} | {component.description} | {covered acceptance criteria or deferral reason} |
+
+## Generic Crystallization
+{Fill the generic crystallization template for every active component. Do not substitute a field-specific template unless it was selected as an optional context lens.}
+
+| Component | Objective | Stakeholder/User/Audience | Success Criteria | Constraints / Non-Goals | Inputs / Resources / Access / Authority | Output / Deliverable Format | Material Risks / Uncertainties | Resolved or Deferred Decisions |
+|-----------|-----------|---------------------------|------------------|--------------------------|-----------------------------------------|-----------------------------|-------------------------------|--------------------------------|
+| {component.name} | {objective} | {stakeholder} | {criteria} | {constraints} | {inputs} | {output} | {risks} | {decisions} |
+
+## Issue Inventory
+{Summarize Harness-Style Clarity Architecture issue buckets, severity, evidence, status, and how each critical/major issue was resolved, accepted, deferred, or converted into a follow-up.}
+
+| Bucket | Severity | Component | Evidence | Status | Resolution / Follow-Up |
+|--------|----------|-----------|----------|--------|------------------------|
+| {bucket} | {critical|major|minor} | {component} | {evidence} | {open|resolved|accepted|deferred} | {resolution} |
 
 ## Established Facts
 {List stable confirmed decisions promoted into `state.established_facts`, including source round, evidence, and disputed status when any fact was contradicted.}
@@ -792,11 +871,13 @@ Why bad: 45% ambiguity means nearly half the requirements are unclear. The mathe
 - [ ] Oversized initial context/history summarized before scoring, question generation, spec generation, or handoff
 - [ ] Round 0 topology gate completed before scoring; `topology.confirmed_at` persisted
 - [ ] Ambiguity scored and displayed every round, naming the weakest component/dimension target (rotating across active components when N > 1)
+- [ ] Harness-Style Clarity Architecture issue inventory updated every round; low ambiguity did not override unresolved critical/major issues
+- [ ] Domain lens selection stayed optional/contextual; no research/ML or other field-specific template was treated as the default
 - [ ] Lateral panel convened at milestone transitions (and before synthesizing agent-supplied answers) with parallel read-only personas
 - [ ] Free-text answers passed the Refine gate; dialectic rhythm guard forced a user question after 3 agent-resolved answers; any auto-answer threshold crossing explicitly confirmed
 - [ ] Closure / Acceptance Guard and the one-sentence Restate gate both passed before crystallization
 - [ ] Interview reached ambiguity ≤ threshold OR an explicit early exit with warning
-- [ ] Spec persisted to `.gjc/specs/deep-interview-{slug}.md` exactly via the GJC CLI (no direct `.gjc/` edits without force override), covering every active topology component plus goal/constraints/acceptance criteria/clarity/ontology/transcript
+- [ ] Spec persisted to `.gjc/specs/deep-interview-{slug}.md` exactly via the GJC CLI (no direct `.gjc/` edits without force override), covering every active topology component plus generic crystallization, issue inventory, goal/constraints/acceptance criteria/clarity/ontology/transcript
 - [ ] Spec metadata includes the auto/lateral counters (`auto_researched_rounds`, `auto_answered_rounds`, `lateral_reviews`, `refined_rounds`, `architect_failures`, `lateral_panel_failures`)
 - [ ] Execution bridge presented via `ask`; execution invoked only after explicit approval through a public workflow entrypoint (never direct implementation); state cleaned up after handoff
 </Final_Checklist>
