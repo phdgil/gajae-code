@@ -19,7 +19,7 @@ import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
 import type { ToolSession } from ".";
-import { checkBashAllowedPrefixes } from "./bash-allowed-prefixes";
+import { checkBashAllowedPrefixes, normalizeReadOnlyBashCommand } from "./bash-allowed-prefixes";
 import { applyBashFixups } from "./bash-command-fixup";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
@@ -36,9 +36,20 @@ export const BASH_DEFAULT_PREVIEW_LINES = 10;
 
 const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DEFAULT_AUTO_BACKGROUND_THRESHOLD_MS = 60_000;
+const READ_ONLY_BASH_ENV: Record<string, string> = {
+	GREP_OPTIONS: "",
+	GREP_COLOR: "",
+	GREP_COLORS: "",
+	RIPGREP_CONFIG_PATH: "",
+};
 
-async function saveBashOriginalArtifact(session: ToolSession, originalText: string): Promise<string | undefined> {
+export async function saveBashOriginalArtifactForTests(
+	session: ToolSession,
+	originalText: string,
+): Promise<string | undefined> {
 	try {
+		const manager = session.getArtifactManager?.();
+		if (manager) return await manager.save(originalText, "bash-original");
 		const alloc = await session.allocateOutputArtifact?.("bash-original");
 		if (!alloc?.path || !alloc.id) return undefined;
 		await Bun.write(alloc.path, originalText);
@@ -256,6 +267,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			hasSearch: this.session.settings.get("search.enabled"),
 			hasFind: this.session.settings.get("find.enabled"),
 			restrictedAllowedPrefixes: this.session.bashAllowedPrefixes,
+			restrictionProfile: this.session.bashRestrictionProfile,
 		});
 	}
 
@@ -358,6 +370,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const label = options.command.length > 120 ? `${options.command.slice(0, 117)}...` : options.command;
 		let latestText = "";
 		let backgrounded = options.startBackgrounded;
+		const runningDetails = (jobId: string): Record<string, unknown> | undefined =>
+			backgrounded ? { async: { state: "running", jobId, type: "bash" } } : undefined;
+		const completedDetails = (jobId: string): Record<string, unknown> | undefined =>
+			backgrounded ? { async: { state: "completed", jobId, type: "bash" } } : undefined;
+		const failedDetails = (jobId: string): Record<string, unknown> | undefined =>
+			backgrounded ? { async: { state: "failed", jobId, type: "bash" } } : undefined;
 		const completion = Promise.withResolvers<ManagedBashJobCompletion>();
 
 		const jobId = manager.register(
@@ -375,10 +393,13 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						env: options.resolvedEnv,
 						artifactPath,
 						artifactId,
+						oneShot: true,
+						ignoreShellPrefix: this.session.bashRestrictionProfile === "read-only",
+						disableShellSnapshot: this.session.bashRestrictionProfile === "read-only",
 						onChunk: chunk => {
 							tailBuffer.append(chunk);
 							latestText = tailBuffer.text();
-							void reportProgress(latestText, { async: { state: "running", jobId, type: "bash" } });
+							void reportProgress(latestText, runningDetails(jobId));
 						},
 						onRawChunk: chunk => {
 							// Forward the unthrottled sanitized chunk to the async-job
@@ -387,7 +408,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							// path above.
 							manager.appendOutput(jobId, chunk);
 						},
-						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
+						onMinimizedSave: originalText => saveBashOriginalArtifactForTests(this.session, originalText),
 					});
 					const finalResult = this.#buildCompletedResult(result, options.timeoutSec, {
 						requestedTimeoutSec: options.requestedTimeoutSec,
@@ -396,13 +417,13 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					const finalText = this.#extractTextResult(finalResult);
 					latestText = finalText;
 					completion.resolve({ kind: "completed", result: finalResult });
-					await reportProgress(finalText, { async: { state: "completed", jobId, type: "bash" } });
+					await reportProgress(finalText, completedDetails(jobId));
 					return finalText;
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					latestText = message;
 					completion.resolve({ kind: "failed", error });
-					await reportProgress(message, { async: { state: "failed", jobId, type: "bash" } });
+					await reportProgress(message, failedDetails(jobId));
 					throw error;
 				}
 			},
@@ -433,6 +454,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		job: ManagedBashJobHandle,
 		thresholdMs: number,
 		signal?: AbortSignal,
+		backgroundRequest?: Promise<void>,
 	): Promise<ManagedBashJobCompletion | { kind: "running" } | { kind: "aborted" }> {
 		if (signal?.aborted) {
 			return { kind: "aborted" };
@@ -442,6 +464,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			job.completion,
 			Bun.sleep(thresholdMs).then(() => ({ kind: "running" as const })),
 		];
+		if (backgroundRequest) {
+			waiters.push(backgroundRequest.then(() => ({ kind: "running" as const })));
+		}
 
 		if (!signal) {
 			return await Promise.race(waiters);
@@ -504,23 +529,37 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 
 		const rawCommand = input.command;
 		const allowedPrefixes = this.session.bashAllowedPrefixes;
+		if (
+			(this.session.bashRestrictionProfile === "read-only" || (allowedPrefixes && allowedPrefixes.length > 0)) &&
+			env &&
+			Object.keys(env).length > 0
+		) {
+			const mode = this.session.bashRestrictionProfile === "read-only" ? "Read-only" : "Restricted role-agent";
+			throw new ToolError(`${mode} bash does not allow per-command env overrides.`);
+		}
 		if (allowedPrefixes && allowedPrefixes.length > 0) {
-			if (env && Object.keys(env).length > 0) {
-				throw new ToolError("Restricted role-agent bash does not allow per-command env overrides.");
-			}
 			const commandsToCheck = rawCommand === command ? [command] : [rawCommand, command];
 			for (const commandToCheck of commandsToCheck) {
-				const allowlist = checkBashAllowedPrefixes(commandToCheck, allowedPrefixes);
+				const allowlist = checkBashAllowedPrefixes(commandToCheck, allowedPrefixes, {
+					profile: this.session.bashRestrictionProfile,
+				});
 				if (!allowlist.allowed) {
 					throw new ToolError(allowlist.reason ?? "Command blocked by restricted role-agent bash allowlist.");
 				}
 			}
 		}
+		if (this.session.bashRestrictionProfile === "read-only") {
+			const normalizedReadOnlyCommand = normalizeReadOnlyBashCommand(command);
+			if (!normalizedReadOnlyCommand) {
+				throw new ToolError("Read-only bash command could not be normalized safely.");
+			}
+			command = normalizedReadOnlyCommand;
+		}
 
 		// Check both the original command and the cwd-normalized command so
 		// leading `cd ... &&` wrappers do not hide either shell-navigation rules
 		// or the dedicated-tool command that follows the directory change.
-		if (this.session.settings.get("bashInterceptor.enabled")) {
+		if (this.session.bashRestrictionProfile !== "read-only" && this.session.settings.get("bashInterceptor.enabled")) {
 			const rules = this.session.settings.getBashInterceptorRules();
 			const commandsToCheck = rawCommand === command ? [command] : [rawCommand, command];
 			for (const commandToCheck of commandsToCheck) {
@@ -539,7 +578,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				getSessionId: this.session.getSessionId,
 			},
 		};
-		command = await expandInternalUrls(command, { ...internalUrlOptions, ensureLocalParentDirs: true });
+		command = await expandInternalUrls(command, {
+			...internalUrlOptions,
+			ensureLocalParentDirs: this.session.bashRestrictionProfile !== "read-only",
+		});
 		const sessionFile = this.session.getSessionFile?.() ?? null;
 		const expandedEnv = env
 			? Object.fromEntries(
@@ -562,6 +604,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				cwd: this.session.cwd,
 			}),
 			...expandedEnv,
+			...(this.session.bashRestrictionProfile === "read-only" ? READ_ONLY_BASH_ENV : {}),
 			...(allowedPrefixes && allowedPrefixes.length > 0 ? { [GJC_RESTRICTED_ROLE_AGENT_BASH_ENV]: "1" } : {}),
 		};
 
@@ -675,6 +718,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						env: prepared.resolvedEnv,
 						artifactPath,
 						artifactId,
+						oneShot: true,
+						ignoreShellPrefix: this.session.bashRestrictionProfile === "read-only",
+						disableShellSnapshot: this.session.bashRestrictionProfile === "read-only",
 						onChunk: chunk => {
 							tailBuffer.append(chunk);
 							void reportProgress(tailBuffer.text(), {
@@ -688,7 +734,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							cursorOffset = slice.nextOffset;
 							dispatchLines(slice.text);
 						},
-						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
+						onMinimizedSave: originalText => saveBashOriginalArtifactForTests(this.session, originalText),
 					});
 					flushTrailingLine();
 					this.#buildResultText(result, prepared.timeoutSec, result.output || "(no output)");
@@ -722,6 +768,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (asyncRequested && !this.#asyncEnabled) {
 			throw new ToolError("Async bash execution is disabled. Enable async.enabled to use async mode.");
 		}
+		if (this.session.bashRestrictionProfile === "read-only" && pty) {
+			throw new ToolError("Read-only bash does not allow PTY mode.");
+		}
+
 		const prepared = await this.#prepareBashExecution(
 			{ command: rawCommand, env: rawEnv, timeout: rawTimeout, cwd },
 			ctx,
@@ -780,7 +830,22 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					notices: pendingNotices,
 				});
 			}
-			const waitResult = await this.#waitForManagedBashJob(job, autoBackgroundWaitMs, signal);
+			const backgroundRequest = Promise.withResolvers<void>();
+			const unregisterBackgroundRequest = this.session.registerForegroundBashBackgroundRequestHandler?.(() => {
+				job.setBackgrounded(true);
+				backgroundRequest.resolve();
+			});
+			let waitResult: ManagedBashJobCompletion | { kind: "running" } | { kind: "aborted" };
+			try {
+				waitResult = await this.#waitForManagedBashJob(
+					job,
+					autoBackgroundWaitMs,
+					signal,
+					backgroundRequest.promise,
+				);
+			} finally {
+				unregisterBackgroundRequest?.();
+			}
 			if (waitResult.kind === "completed") {
 				autoBgManager.acknowledgeDeliveries([job.jobId]);
 				return waitResult.result;
@@ -803,7 +868,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 
 		// Route through the client terminal when the client advertises the terminal capability.
 		// Skip when pty=true (PTY needs the local terminal UI).
-		const clientBridge = this.session.getClientBridge?.();
+		const clientBridge =
+			this.session.bashRestrictionProfile === "read-only" ? undefined : this.session.getClientBridge?.();
 		if (clientBridge?.capabilities.terminal && clientBridge.createTerminal && !pty) {
 			const handle = await clientBridge.createTerminal({
 				command,
@@ -976,7 +1042,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// Allocate artifact for truncated output storage
 		const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 
-		const interactiveUi = canUseInteractiveBashPty(pty, ctx) ? ctx?.ui : undefined;
+		const interactiveUi =
+			this.session.bashRestrictionProfile === "read-only"
+				? undefined
+				: canUseInteractiveBashPty(pty, ctx)
+					? ctx?.ui
+					: undefined;
 		const result: BashResult | BashInteractiveResult = interactiveUi
 			? await runInteractiveBashPty(interactiveUi, {
 					command,
@@ -990,13 +1061,16 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			: await executeBash(command, {
 					cwd: commandCwd,
 					sessionKey: this.session.getSessionId?.() ?? undefined,
+					oneShot: this.session.bashRestrictionProfile === "read-only",
 					timeout: timeoutMs,
 					signal,
 					env: resolvedEnv,
 					artifactPath,
 					artifactId,
 					onChunk: streamTailUpdates(tailBuffer, onUpdate),
-					onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
+					onMinimizedSave: originalText => saveBashOriginalArtifactForTests(this.session, originalText),
+					ignoreShellPrefix: this.session.bashRestrictionProfile === "read-only",
+					disableShellSnapshot: this.session.bashRestrictionProfile === "read-only",
 				});
 		if (result.cancelled) {
 			if (signal?.aborted) {

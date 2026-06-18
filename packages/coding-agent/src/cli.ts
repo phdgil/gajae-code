@@ -35,6 +35,7 @@ const commands: CommandEntry[] = [
 	{ name: "gc", load: () => import("./commands/gc").then(m => m.default) },
 	{ name: "ralplan", load: () => import("./commands/ralplan").then(m => m.default) },
 	{ name: "config", load: () => import("./commands/config").then(m => m.default) },
+	{ name: "web-search", aliases: ["q"], load: () => import("./commands/web-search").then(m => m.default) },
 	{ name: "mcp-serve", load: () => import("./commands/mcp-serve").then(m => m.default) },
 	{
 		name: "contribute-pr",
@@ -42,6 +43,7 @@ const commands: CommandEntry[] = [
 		load: () => import("./commands/contribution-prep").then(m => m.default),
 	},
 	{ name: "deep-interview", load: () => import("./commands/deep-interview").then(m => m.default) },
+	{ name: "rlm", load: () => import("./commands/rlm").then(m => m.default) },
 	{ name: "update", load: () => import("./commands/update").then(m => m.default) },
 	{ name: "launch", load: () => import("./commands/launch").then(m => m.default) },
 ];

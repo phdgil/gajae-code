@@ -1141,7 +1141,10 @@ function b() {
 						testDir,
 						Settings.isolated({
 							"bash.autoBackground.enabled": true,
-							"bash.autoBackground.thresholdMs": 50,
+							// Generous threshold so a trivial `echo` always finishes inline; a tight
+							// budget (e.g. 50ms) races process-spawn overhead under full-suite load
+							// and flakily backgrounds an instant command.
+							"bash.autoBackground.thresholdMs": 30_000,
 						}),
 						{
 							getSessionId: () => "test-session",
@@ -1200,6 +1203,81 @@ function b() {
 			expect(runningJob?.status).toBe("running");
 			await runningJob?.promise;
 			await asyncJobManager.drainDeliveries({ timeoutMs: 1 });
+			expect(deliveries).toHaveLength(1);
+			expect(deliveries[0]?.jobId).toBe(jobId);
+			expect(deliveries[0]?.text).toContain("done");
+			await asyncJobManager.dispose();
+		});
+
+		it("should fold a managed foreground command into a background job when requested", async () => {
+			const deliveries: Array<{ jobId: string; text: string }> = [];
+			const updates: Array<{ text: string; asyncState?: string }> = [];
+			const asyncJobManager = new AsyncJobManager({
+				onJobComplete: async (jobId, text) => {
+					deliveries.push({ jobId, text });
+				},
+			});
+			AsyncJobManager.setInstance(asyncJobManager);
+			let backgroundRequestHandler: (() => void) | undefined;
+			const autoBackgroundBashTool = wrapToolWithMetaNotice(
+				new BashTool(
+					createTestToolSession(
+						testDir,
+						Settings.isolated({
+							"bash.autoBackground.enabled": true,
+							"bash.autoBackground.thresholdMs": 30_000,
+						}),
+						{
+							getSessionId: () => "test-session",
+							registerForegroundBashBackgroundRequestHandler: handler => {
+								backgroundRequestHandler = handler;
+								return () => {
+									if (backgroundRequestHandler === handler) backgroundRequestHandler = undefined;
+								};
+							},
+						},
+					),
+				),
+			);
+
+			const resultPromise = autoBackgroundBashTool.execute(
+				"test-call-9-fold-foreground",
+				{
+					command: "printf 'start\\n'; sleep 0.05; printf 'after-fold\\n'; sleep 0.2; printf 'done\\n'",
+				},
+				undefined,
+				partialResult => {
+					updates.push({
+						text: getTextOutput(partialResult),
+						asyncState: partialResult.details?.async?.state,
+					});
+				},
+			);
+
+			for (let i = 0; i < 50 && !backgroundRequestHandler; i++) {
+				await Bun.sleep(10);
+			}
+			expect(backgroundRequestHandler).toBeDefined();
+			backgroundRequestHandler?.();
+
+			const result = await resultPromise;
+			expect(result.details?.async?.state).toBe("running");
+			expect(result.details?.async?.type).toBe("bash");
+			expect(getTextOutput(result)).toContain("Background job");
+			expect(getTextOutput(result)).toContain("start");
+			expect(backgroundRequestHandler).toBeUndefined();
+
+			const jobId = result.details?.async?.jobId;
+			if (!jobId) {
+				throw new Error("expected a folded background job id");
+			}
+			const runningJob = asyncJobManager.getJob(jobId);
+			expect(runningJob?.status).toBe("running");
+			await runningJob?.promise;
+			await asyncJobManager.drainDeliveries({ timeoutMs: 1 });
+			const postFoldProgress = updates.filter(update => update.text.includes("after-fold"));
+			expect(postFoldProgress.length).toBeGreaterThan(0);
+			expect(postFoldProgress.every(update => update.asyncState !== undefined)).toBe(true);
 			expect(deliveries).toHaveLength(1);
 			expect(deliveries[0]?.jobId).toBe(jobId);
 			expect(deliveries[0]?.text).toContain("done");
@@ -1345,6 +1423,82 @@ function b() {
 
 			// If it correctly acknowledged, the delivery is suppressed.
 			expect(manager.hasPendingDeliveries()).toBe(false);
+		});
+
+		it("should show retained output for a running job without waiting", async () => {
+			const manager = new AsyncJobManager({
+				onJobComplete: async () => {},
+			});
+			const session = createTestToolSession(testDir, Settings.isolated({ "bash.autoBackground.enabled": true }), {});
+			AsyncJobManager.setInstance(manager);
+			const jobTool = JobTool.createIf(session)!;
+
+			const jobId = manager.register("bash", "long job", async ({ signal }) => {
+				await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+				return "done";
+			});
+			manager.appendOutput(jobId, "line one\n");
+			manager.appendOutput(jobId, "line two\n");
+
+			const result = await jobTool.execute("test-call-tail-1", { tail: [jobId] });
+			const output = getTextOutput(result);
+
+			expect(output).toContain("Still Running");
+			expect(output).toContain("Retained Output");
+			expect(output).toContain("line one");
+			expect(output).toContain("line two");
+			expect(result.details?.output?.[0]).toMatchObject({
+				id: jobId,
+				text: "line one\nline two\n",
+				truncated: false,
+			});
+
+			manager.cancel(jobId);
+			await manager.dispose({ timeoutMs: 100 });
+		});
+
+		it("should scope retained output tails to the calling owner", async () => {
+			const manager = new AsyncJobManager({
+				onJobComplete: async () => {},
+			});
+			const ownerSession = createTestToolSession(
+				testDir,
+				Settings.isolated({ "bash.autoBackground.enabled": true }),
+				{
+					getAgentId: () => "0-Owner",
+				},
+			);
+			const otherSession = createTestToolSession(
+				testDir,
+				Settings.isolated({ "bash.autoBackground.enabled": true }),
+				{
+					getAgentId: () => "0-Other",
+				},
+			);
+			AsyncJobManager.setInstance(manager);
+			const ownerTool = JobTool.createIf(ownerSession)!;
+			const otherTool = JobTool.createIf(otherSession)!;
+
+			const jobId = manager.register(
+				"bash",
+				"private job",
+				async ({ signal }) => {
+					await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+					return "done";
+				},
+				{ ownerId: "0-Owner" },
+			);
+			manager.appendOutput(jobId, "owner-only\n");
+
+			const ownerResult = await ownerTool.execute("test-call-tail-owner", { tail: [jobId] });
+			const otherResult = await otherTool.execute("test-call-tail-other", { tail: [jobId] });
+
+			expect(ownerResult.details?.output?.[0]?.text).toBe("owner-only\n");
+			expect(otherResult.details?.output).toBeUndefined();
+			expect(getTextOutput(otherResult)).not.toContain("owner-only");
+
+			manager.cancel(jobId);
+			await manager.dispose({ timeoutMs: 100 });
 		});
 	});
 

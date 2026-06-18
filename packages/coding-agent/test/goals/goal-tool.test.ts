@@ -41,6 +41,7 @@ function createToolSession(overrides: Partial<ToolSession>): ToolSession {
 
 function createRuntimeHarness(initialState?: GoalModeState) {
 	let state = cloneState(initialState);
+	const persists: string[] = [];
 	const runtime = new GoalRuntime({
 		getState: () => cloneState(state),
 		setState: next => {
@@ -48,13 +49,16 @@ function createRuntimeHarness(initialState?: GoalModeState) {
 		},
 		getCurrentUsage: () => createUsage(),
 		emit: async () => {},
-		persist: (_mode, _state) => {},
+		persist: (mode, _state) => {
+			persists.push(mode);
+		},
 		sendHiddenMessage: async _message => {},
 		now: () => 0,
 	});
 	return {
 		runtime,
 		getState: () => cloneState(state),
+		persists,
 	};
 }
 
@@ -109,6 +113,28 @@ describe("GoalTool", () => {
 			text: "Goal: Complete route\nStatus: complete\nTokens used: 7",
 		});
 		expect(JSON.stringify(completed.details)).not.toContain("Budget");
+	});
+
+	it("honors per-session goal operation restrictions", async () => {
+		const harness = createRuntimeHarness({
+			enabled: true,
+			mode: "active",
+			goal: createGoal({ objective: "RLM analysis" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				goalToolAllowedOps: ["get", "complete"],
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		const fetched = await tool.execute("call-get", { op: "get" });
+		expect(fetched.details?.op).toBe("get");
+		await expect(tool.execute("call-drop", { op: "drop" })).rejects.toThrow(
+			"only allows goal operations: get, complete",
+		);
+		expect(harness.getState()?.goal.status).toBe("active");
 	});
 
 	it("rejects unsupported token_budget before creating or mutating", async () => {
@@ -311,6 +337,111 @@ describe("GoalTool", () => {
 		expect(result.details?.goal?.status).toBe("active");
 		expect(harness.getState()?.enabled).toBe(true);
 	});
+	it("op=pause parks an active goal and stops the continuation loop", async () => {
+		const harness = createRuntimeHarness({
+			enabled: true,
+			mode: "active",
+			goal: createGoal({ objective: "Sing the vocal layers" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		// continuation is armed while the goal is active
+		expect(harness.runtime.buildContinuationPrompt()).toBeTypeOf("string");
+
+		const result = await tool.execute("call-pause", { op: "pause" });
+		expect(result.details?.op).toBe("pause");
+		expect(result.details?.goal?.status).toBe("paused");
+		expect(harness.getState()?.enabled).toBe(false);
+
+		// pausing suppresses the autonomous continuation steer
+		expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
+		// an active goal is persisted in the goal_paused mode when parked
+		expect(harness.persists).toContain("goal_paused");
+	});
+
+	it("a paused goal resumes back to active and re-arms continuation", async () => {
+		const harness = createRuntimeHarness({
+			enabled: true,
+			mode: "active",
+			goal: createGoal({ objective: "Sing the vocal layers" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		await tool.execute("call-pause", { op: "pause" });
+		expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
+
+		const resumed = await tool.execute("call-resume", { op: "resume" });
+		expect(resumed.details?.goal?.status).toBe("active");
+		expect(harness.getState()?.enabled).toBe(true);
+		expect(harness.runtime.buildContinuationPrompt()).toBeTypeOf("string");
+	});
+	it("op=pause rejects a completed goal and leaves its lifecycle intact", async () => {
+		const harness = createRuntimeHarness({
+			enabled: false,
+			mode: "exiting",
+			reason: "completed",
+			goal: createGoal({ objective: "Already done", status: "complete" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		await expect(tool.execute("call-pause", { op: "pause" })).rejects.toThrow(/cannot pause/);
+
+		// the completed goal must not be driven into a paused-mode lifecycle
+		const state = harness.getState();
+		expect(state?.goal.status).toBe("complete");
+		expect(state?.mode).toBe("exiting");
+		expect(state?.reason).toBe("completed");
+		expect(state?.enabled).toBe(false);
+		// a rejected pause must never persist in the goal_paused mode
+		expect(harness.persists).not.toContain("goal_paused");
+	});
+
+	it("op=pause rejects an already-paused goal", async () => {
+		const harness = createRuntimeHarness({
+			enabled: false,
+			mode: "active",
+			goal: createGoal({ objective: "Already parked", status: "paused" }),
+		});
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		await expect(tool.execute("call-pause", { op: "pause" })).rejects.toThrow(/cannot pause/);
+		expect(harness.getState()?.goal.status).toBe("paused");
+		expect(harness.persists).not.toContain("goal_paused");
+	});
+	it("op=pause on a dropped/empty goal is a no-op that returns no goal", async () => {
+		const harness = createRuntimeHarness();
+		const tool = new GoalTool(
+			createToolSession({
+				getGoalRuntime: () => harness.runtime,
+				getGoalModeState: () => harness.getState(),
+			}),
+		);
+
+		const result = await tool.execute("call-pause", { op: "pause" });
+		expect(result.details?.goal).toBeNull();
+		expect(harness.getState()).toBeUndefined();
+		expect(harness.persists).not.toContain("goal_paused");
+	});
 
 	it("op=drop clears goal state", async () => {
 		const harness = createRuntimeHarness({
@@ -331,11 +462,11 @@ describe("GoalTool", () => {
 		expect(harness.getState()).toBeUndefined();
 	});
 
-	it("exposes the schema describe enumerating all five ops", () => {
+	it("exposes the schema describe enumerating all six ops", () => {
 		const tool = new GoalTool(createToolSession({}));
 		const opDescribe = (tool.parameters as any).shape.op.description;
 		expect(opDescribe).toBe(
-			"op: get | create | complete | drop | resume — drop clears the active goal without exiting goal mode (tool stays callable for the next create)",
+			"op: get | create | complete | drop | resume | pause — drop clears the active goal without exiting goal mode (tool stays callable for the next create); pause parks an active goal whose remaining work is blocked on human input so the autonomous continuation loop stops until resume",
 		);
 	});
 
@@ -347,6 +478,7 @@ describe("GoalTool", () => {
 		expect(opDescribe).toContain("complete");
 		expect(opDescribe).toContain("drop");
 		expect(opDescribe).toContain("resume");
+		expect(opDescribe).toContain("pause");
 		expect(opDescribe).toContain("without exiting goal mode");
 	});
 });

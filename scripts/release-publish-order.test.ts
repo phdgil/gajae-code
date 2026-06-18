@@ -78,3 +78,25 @@ describe("release bump set equals publish set", () => {
 		expect([...publishDirs].sort()).toEqual([...bumpableDirs].sort());
 	});
 });
+
+describe("native release binary coverage", () => {
+	test("release workflow skips deprecated Intel macOS runners", async () => {
+		const workflow = await Bun.file(path.join(repoRoot, ".github/workflows/ci.yml")).text();
+
+		expect(workflow).not.toContain("{ os: macos-13, platform: darwin, arch: x64 }");
+		expect(workflow).not.toContain("target_id: darwin-x64");
+		expect(workflow).not.toContain("binary_path: packages/coding-agent/binaries/gjc-darwin-x64");
+		expect(workflow).toContain("{ os: macos-14, platform: darwin, arch: arm64 }");
+		expect(workflow).toContain("target_id: darwin-arm64");
+		expect(workflow).toContain("pattern: pi-natives-${{ matrix.platform }}-${{ matrix.arch }}*-h${{ needs.rust-hash.outputs.hash }}");
+	});
+
+	test("installer explains missing Intel macOS release assets", async () => {
+		const installer = await Bun.file(path.join(repoRoot, "scripts/install.sh")).text();
+
+		expect(installer).toContain("No prebuilt GJC binary was found for ${PLATFORM}-${ARCH} in ${LATEST}.");
+		expect(installer).toContain("Intel macOS standalone binaries are not built by current release CI");
+		expect(installer).toContain("Re-run this installer with --source");
+		expect(installer).toContain("Expected asset URL: $BINARY_URL");
+	});
+});

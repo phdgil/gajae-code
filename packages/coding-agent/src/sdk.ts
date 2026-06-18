@@ -47,11 +47,13 @@ import {
 import { loadPromptTemplates as loadPromptTemplatesInternal, type PromptTemplate } from "./config/prompt-templates";
 import { Settings, type SkillsSettings } from "./config/settings";
 import { CursorExecHandlers } from "./cursor";
+import type { BashRestrictionProfile } from "./tools/bash-allowed-prefixes";
 import "./discovery";
 import { resolveConfigValue } from "./config/resolve-config-value";
 import { getEmbeddedDefaultGjcSkills } from "./defaults/gjc-defaults";
 import { BUNDLED_GROK_BUILD_EXTENSION_ID, getBundledGrokBuildExtensionFactory } from "./defaults/gjc-grok-cli";
 import { initializeWithSettings } from "./discovery";
+import { disposeAllVmContexts, disposeVmContextsByOwner } from "./eval/js/context-manager";
 import { disposeAllKernelSessions, disposeKernelSessionsByOwner } from "./eval/py/executor";
 import { TtsrManager } from "./export/ttsr";
 import type { CustomCommandsLoadResult, LoadedCustomCommand } from "./extensibility/custom-commands";
@@ -309,6 +311,12 @@ export interface CreateAgentSessionOptions {
 	agentDisplayName?: string;
 	/** Optional restricted bash command prefixes for read-only role agents. */
 	bashAllowedPrefixes?: string[];
+	/** Restriction policy paired with bashAllowedPrefixes. */
+	bashRestrictionProfile?: BashRestrictionProfile;
+	/** Optional per-session restriction for goal tool operations. */
+	goalToolAllowedOps?: readonly ("create" | "get" | "complete" | "resume" | "drop" | "pause")[];
+	/** Optional per-session allowlist for tools exposed through search_tool_bm25. */
+	discoverableToolAllowedNames?: readonly string[];
 	/** Optional shared agent registry for IRC routing. Default: AgentRegistry.global(). */
 	agentRegistry?: AgentRegistry;
 	/** Parent task ID prefix for nested artifact naming (e.g., "6-Extensions") */
@@ -414,6 +422,7 @@ function getDefaultAgentDir(): string {
  */
 export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir()): Promise<AuthStorage> {
 	const brokerConfig = await resolveAuthBrokerConfig();
+	const credentialRankingMode = resolveCredentialRankingMode();
 	if (brokerConfig) {
 		const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
 		const initialResult = await client.fetchSnapshot();
@@ -424,6 +433,7 @@ export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir(
 		const storage = new AuthStorage(store, {
 			configValueResolver: resolveConfigValue,
 			sourceLabel: `broker ${brokerConfig.url}`,
+			credentialRankingMode,
 		});
 		await storage.reload();
 		return storage;
@@ -432,9 +442,23 @@ export async function discoverAuthStorage(agentDir: string = getDefaultAgentDir(
 	const storage = await AuthStorage.create(dbPath, {
 		configValueResolver: resolveConfigValue,
 		sourceLabel: `local ${dbPath}`,
+		credentialRankingMode,
 	});
 	await storage.reload();
 	return storage;
+}
+
+/**
+ * Opt-in multi-account credential ranking mode, read from the
+ * `GJC_CREDENTIAL_RANKING_MODE` env var. Unset/unknown → `undefined`, leaving
+ * {@link AuthStorage}'s default (`balanced`) untouched. `earliest-reset`
+ * switches to earliest-expiry-first selection so soon-to-reset tumbling-window
+ * quota is drained before it is lost.
+ */
+function resolveCredentialRankingMode(): "balanced" | "earliest-reset" | undefined {
+	const raw = process.env.GJC_CREDENTIAL_RANKING_MODE?.trim();
+	if (raw === "balanced" || raw === "earliest-reset") return raw;
+	return undefined;
 }
 
 /**
@@ -570,6 +594,14 @@ function registerPythonCleanup(): void {
 	postmortem.register("python-cleanup", disposeAllKernelSessions);
 }
 
+let jsVmCleanupRegistered = false;
+
+function registerJsVmCleanup(): void {
+	if (jsVmCleanupRegistered) return;
+	jsVmCleanupRegistered = true;
+	postmortem.register("js-vm-cleanup", disposeAllVmContexts);
+}
+
 /**
  * Resolve whether to enable append-only context mode based on the setting and provider.
  *
@@ -594,6 +626,7 @@ function customToolToDefinition(tool: CustomTool): ToolDefinition {
 		label: tool.label,
 		description: tool.description,
 		parameters: tool.parameters,
+		concurrency: tool.concurrency,
 		hidden: tool.hidden,
 		deferrable: tool.deferrable,
 		mcpServerName: tool.mcpServerName,
@@ -806,6 +839,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	registerSshCleanup();
 	registerPythonCleanup();
+	registerJsVmCleanup();
 
 	// Pin authStorage to modelRegistry.authStorage: ModelRegistry.getApiKey() routes refresh
 	// failures through that instance, so any divergent storage handed to the bridge / mcpManager
@@ -1193,6 +1227,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			getAgentId: () => resolvedAgentId,
 			bashAllowedPrefixes: options.bashAllowedPrefixes,
+			bashRestrictionProfile: options.bashRestrictionProfile,
+			goalToolAllowedOps: options.goalToolAllowedOps,
+			discoverableToolAllowedNames: options.discoverableToolAllowedNames,
 			getToolByName: name => session?.getToolByName(name),
 			agentRegistry,
 			getSessionSpawns: () => options.spawns ?? "*",
@@ -2002,6 +2039,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			rebuildSystemPrompt,
 			reloadSshTool,
 			requestedToolNames: requestedToolNameSet,
+			discoverableToolAllowedNames: options.discoverableToolAllowedNames,
 			getMcpServerInstructions: mcpManager
 				? () => {
 						const raw = mcpManager.getServerInstructions();
@@ -2200,6 +2238,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			} else {
 				if (hasRegistered) agentRegistry.unregister(resolvedAgentId);
 				await disposeKernelSessionsByOwner(evalKernelOwnerId);
+				await disposeVmContextsByOwner(evalKernelOwnerId);
 			}
 		} catch (cleanupError) {
 			logger.warn("Failed to clean up createAgentSession resources after startup error", {

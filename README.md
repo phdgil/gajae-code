@@ -22,6 +22,20 @@
 
 > Gajae-Code is an experimental, beta-stage project. Expect rough edges and verify outputs before relying on it for important work.
 
+## New in 0.6.0
+
+<p align="center">
+  <img src="assets/rlm.png" alt="rlm research/REPL mode — Research. Experiment. Iterate." width="100%" />
+</p>
+
+**`rlm`** — an opt-in research/REPL mode. A Jupyter-notebook-style research session over the agent loop, backed by the shared persistent Python kernel with a hard-gated `python` + `read` + `web_search` toolset. Runs aggregate into `.gjc/rlm/<session>/notebook.ipynb` and synthesize a `report.md` on exit. Start it with `gjc rlm`.
+
+<p align="center">
+  <img src="assets/computer-use.png" alt="computer-use desktop control — See. Click. Type. Control." width="100%" />
+</p>
+
+**`computer-use`** — an experimental, opt-in desktop-control tool surface. Backed by native screenshot/input bindings and gated through settings/tool registration, it lets the agent see the screen and drive mouse/keyboard for local desktop coordination.
+
 ## Website
 
 Visit **[gajae-code.com](https://gajae-code.com)** for the Gajae Code landing page, quick-start guide, architecture overview, harness notes, bridge/RPC docs, skills, receipts, remote-control design, and troubleshooting.
@@ -44,6 +58,16 @@ bun install -g gajae-code
 ```
 
 The scoped package is also available as `@gajae-code/coding-agent`.
+
+### macOS Intel install
+
+Standalone release binaries currently target Apple Silicon macOS (`gjc-darwin-arm64`), Linux, and Windows. Intel macOS (`darwin-x64`) is no longer built in release CI because GitHub's Intel macOS runner pool is deprecated and can remain queued for hours. On Intel Macs, install through the npm/Bun package path or build from source:
+
+```sh
+bun install -g gajae-code
+# or
+curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/gajae-code/main/scripts/install.sh | sh -s -- --source
+```
 
 ### Windows (native install)
 
@@ -144,9 +168,9 @@ No sprawling default skill zoo: GJC improves by making this small method better.
 | Claude Code | `gjc --tmux` or `gjc --tmux --worktree <name>` | GJC does not become a Claude Code extension. |
 | OpenCode | `gjc` or `gjc --tmux` | External-runner workflow only today. |
 | Claw Code | `gjc --tmux --worktree <name>` | GJC does not install into or replace Claw Code. |
-| External controller / bot | `gjc mcp-serve coordinator` plus `gjc setup hermes` for compatible config, or `gjc --mode rpc` for a subprocess worker | Any MCP/RPC-capable bot drives GJC through the generic coordinator/RPC contract, not scrollback scraping. |
+| External controller / bot | `gjc --mode rpc` for a subprocess worker, or Bridge/HTTPS surfaces where configured | External controllers drive GJC through generic RPC/bridge contracts, not scrollback scraping. |
 
-For generic third-party bot setup and provider-independent smokes, see [`docs/bot-integration.md`](docs/bot-integration.md). For the readiness classification across MCP, RPC, ACP, and Bridge/HTTPS surfaces, see [`docs/external-control-readiness.md`](docs/external-control-readiness.md). For lower-level protocol details, see [`docs/hermes-mcp-bridge.md`](docs/hermes-mcp-bridge.md), [`docs/rpc.md`](docs/rpc.md), and [`docs/bridge.md`](docs/bridge.md). For the remote operator surfaces roadmap, see [`docs/gajae-remote.md`](docs/gajae-remote.md) (web steering wheel) and [`docs/telegram-remote.md`](docs/telegram-remote.md) (Telegram lifecycle button).
+For generic third-party bot setup and provider-independent smokes, see [`docs/bot-integration.md`](docs/bot-integration.md). For the readiness classification across RPC, ACP, and Bridge/HTTPS surfaces, see [`docs/external-control-readiness.md`](docs/external-control-readiness.md). For lower-level protocol details, see [`docs/hermes-mcp-bridge.md`](docs/hermes-mcp-bridge.md), [`docs/rpc.md`](docs/rpc.md), and [`docs/bridge.md`](docs/bridge.md). For the remote operator surfaces roadmap, see [`docs/gajae-remote.md`](docs/gajae-remote.md) (web steering wheel) and [`docs/telegram-remote.md`](docs/telegram-remote.md) (Telegram lifecycle button).
 
 ## Configuration
 
@@ -162,9 +186,25 @@ retry:
 
 `requestMaxRetries` applies before a stream is established. `streamMaxRetries` applies only to replay-safe transient stream failures. Invalid auth, unsupported models/providers, malformed requests, context overflow, user aborts, and permanent quota failures remain fail-fast.
 
+### Good to read together
+
+- [GJC multivendor setup guide](https://github.com/project820/gjc-multivendor-setup-guide) — a community guide for role-based provider/profile selection across Anthropic, OpenAI/Codex, Google/Gemini, xAI/Grok, and opencode-go. Treat its presets as user-level configuration guidance rather than bundled defaults; verify model availability and provider auth in your own environment before adopting them.
+
 ## TUI identity
 
 The default dark TUI identity is the GJC red-claw theme, while light-appearance terminals default to the bundled blue-crab theme. Three additional bundled migration themes — `claude-code`, `codex`, and `opencode` — mirror the look of those tools for easy eye-migration and are selectable from Settings or `/theme`. Explicit user theme settings still win.
+
+### Bundled theme grid
+
+Pick from Settings (`Appearance -> Dark theme` / `Light theme`) or `/theme`.
+
+| Theme | Visual feel | Best fit |
+| --- | --- | --- |
+| `red-claw` | Dark GJC default with warm red-claw accents and strong status contrast. | Native GJC identity for dark terminals. |
+| `blue-crab` | Bright-terminal blue palette tuned for readable light slots. | Light terminal or OS appearance. |
+| `claude-code` | Claude Code-inspired dark palette with terracotta and pink highlights. | Claude Code muscle memory without leaving GJC. |
+| `codex` | Crisp dark blue-gray palette with sharper coding-session contrast. | A Codex-like dark workspace. |
+| `opencode` | OpenCode-inspired dark palette with punchier terminal accents. | OpenCode muscle memory in the bundled picker. |
 
 ## Development
 

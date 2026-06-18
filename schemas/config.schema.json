@@ -662,7 +662,7 @@
 				"steer",
 				"queue"
 			],
-			"description": "What a submitted prompt does while the agent is busy: steer (interrupt the active turn) or queue (run after the active turn completes)",
+			"description": "What a submitted prompt does while the agent is busy: queue normal chat for the next turn, or steer to interrupt the active turn",
 			"default": "steer"
 		},
 		"doubleEscapeAction": {
@@ -1637,6 +1637,7 @@
 							"perplexity",
 							"gemini",
 							"codex",
+							"xai",
 							"tavily",
 							"parallel",
 							"kagi",
@@ -1666,6 +1667,48 @@
 				"screenshotDir": {
 					"type": "string",
 					"description": "Directory to save screenshots. If unset, screenshots go to a temp file. Supports ~. Examples: ~/Downloads, ~/Desktop, /sdcard/Download (Android)"
+				}
+			},
+			"additionalProperties": false
+		},
+		"computer": {
+			"type": "object",
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Enable the macOS computer tool for this session. Off by default.",
+					"default": false
+				},
+				"alwaysOn": {
+					"type": "boolean",
+					"description": "Keep the macOS computer tool callable without per-session enablement.",
+					"default": false
+				},
+				"autoScreenshot": {
+					"type": "boolean",
+					"description": "Automatically request bounded screenshots after computer actions when supported.",
+					"default": false
+				},
+				"screenshotMaxBytes": {
+					"type": "number",
+					"description": "Maximum screenshot payload size for computer action results.",
+					"default": 5000000
+				},
+				"killSwitchHotkey": {
+					"type": "string",
+					"description": "Native stop/suspend hotkey shown to users for computer-use sessions.",
+					"default": "Control+Option+Command+Escape"
+				},
+				"auditLog": {
+					"type": "object",
+					"properties": {
+						"enabled": {
+							"type": "boolean",
+							"description": "Persist audit records for enabled computer-use actions.",
+							"default": true
+						}
+					},
+					"additionalProperties": false
 				}
 			},
 			"additionalProperties": false
@@ -1871,6 +1914,7 @@
 						"anthropic",
 						"gemini",
 						"codex",
+						"xai",
 						"tavily",
 						"kagi",
 						"synthetic",

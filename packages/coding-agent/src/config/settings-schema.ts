@@ -1000,7 +1000,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "interaction",
 			label: "Busy Prompt Mode",
 			description:
-				"What a submitted prompt does while the agent is busy: steer (interrupt the active turn) or queue (run after the active turn completes)",
+				"What a submitted prompt does while the agent is busy: queue normal chat for the next turn, or steer to interrupt the active turn",
 		},
 	},
 
@@ -2160,6 +2160,66 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"computer.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Computer",
+			description: "Enable the macOS computer tool for this session. Off by default.",
+		},
+	},
+
+	"computer.alwaysOn": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Computer Always On",
+			description: "Keep the macOS computer tool callable without per-session enablement.",
+		},
+	},
+
+	"computer.autoScreenshot": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			label: "Computer Auto Screenshot",
+			description: "Automatically request bounded screenshots after computer actions when supported.",
+		},
+	},
+
+	"computer.screenshotMaxBytes": {
+		type: "number",
+		default: 5_000_000,
+		ui: {
+			tab: "tools",
+			label: "Computer Screenshot Max Bytes",
+			description: "Maximum screenshot payload size for computer action results.",
+		},
+	},
+
+	"computer.killSwitchHotkey": {
+		type: "string",
+		default: "Control+Option+Command+Escape",
+		ui: {
+			tab: "tools",
+			label: "Computer Kill Switch Hotkey",
+			description: "Native stop/suspend hotkey shown to users for computer-use sessions.",
+		},
+	},
+
+	"computer.auditLog.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			label: "Computer Audit Log",
+			description: "Persist audit records for enabled computer-use actions.",
+		},
+	},
+
 	// Tool execution
 	"tools.intentTracing": {
 		type: "boolean",
@@ -2647,6 +2707,7 @@ export const SETTINGS_SCHEMA = {
 			"anthropic",
 			"gemini",
 			"codex",
+			"xai",
 			"tavily",
 			"kagi",
 			"synthetic",
@@ -2687,6 +2748,11 @@ export const SETTINGS_SCHEMA = {
 					value: "codex",
 					label: "OpenAI",
 					description: "OpenAI's native web_search (uses ChatGPT OAuth via /login openai-codex)",
+				},
+				{
+					value: "xai",
+					label: "xAI",
+					description: "xAI Responses web_search/x_search (uses xAI OAuth via /login xai or XAI_API_KEY)",
 				},
 				{
 					value: "gemini",

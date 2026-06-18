@@ -23,6 +23,7 @@ type FakeEditor = {
 	onToggleThinking?: () => void;
 	onExternalEditor?: () => void;
 	onDequeue?: () => void;
+	onQueue?: () => void | Promise<void>;
 	onChange?: (text: string) => void;
 	onSubmit?: (text: string) => void | Promise<void>;
 	setText(text: string): void;
@@ -34,11 +35,12 @@ type FakeEditor = {
 	clearCustomKeyHandlers(): void;
 };
 
-async function createContext() {
+async function createContext(options?: { busyPromptMode?: "steer" | "queue" }) {
 	let editorText = "";
 	const keyMap: Record<string, string[]> = {
 		"app.model.selectTemporary": ["ctrl+y"],
 		"app.model.select": ["ctrl+l"],
+		"app.message.queue": ["alt+enter"],
 	};
 	const setActionKeys = vi.fn();
 	const showModelSelector = vi.fn();
@@ -88,6 +90,7 @@ async function createContext() {
 		settings: {
 			get(path: string) {
 				if (path === "images.autoResize") return false;
+				if (path === "busyPromptMode") return options?.busyPromptMode ?? "steer";
 				return undefined;
 			},
 		} as unknown as InteractiveModeContext["settings"],
@@ -178,6 +181,61 @@ describe("InputController keybinding setup", () => {
 
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(1, { temporaryOnly: true });
 		expect(spies.showModelSelector).toHaveBeenNthCalledWith(2);
+	});
+
+	it("registers an explicit queue action separately from immediate submit", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const session = ctx.session as unknown as { isStreaming: boolean };
+		session.isStreaming = true;
+		editor.setText("queue after current response");
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		await editor.onQueue?.();
+		await Bun.sleep(0);
+
+		expect(spies.setActionKeys).toHaveBeenCalledWith("app.message.queue", ["alt+enter"]);
+		expect(ctx.locallySubmittedUserSignatures.has("queue after current response\u00000")).toBe(true);
+		expect(spies.prompt).toHaveBeenCalledWith("queue after current response", {
+			streamingBehavior: "followUp",
+		});
+		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
+	});
+
+	it("steers streaming Enter submissions by default", async () => {
+		const { InputController, ctx, editor, spies } = await createContext();
+		const session = ctx.session as unknown as { isStreaming: boolean };
+		session.isStreaming = true;
+		editor.setText("steer by default while busy");
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		await editor.onSubmit?.("steer by default while busy");
+
+		expect(ctx.locallySubmittedUserSignatures.has("steer by default while busy\u00000")).toBe(true);
+		expect(spies.prompt).toHaveBeenCalledWith("steer by default while busy", {
+			streamingBehavior: "steer",
+			images: undefined,
+		});
+		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
+	});
+
+	it("preserves explicit steer busy setting for streaming Enter submissions", async () => {
+		const { InputController, ctx, editor, spies } = await createContext({ busyPromptMode: "steer" });
+		const session = ctx.session as unknown as { isStreaming: boolean };
+		session.isStreaming = true;
+		editor.setText("steer while busy");
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+
+		await editor.onSubmit?.("steer while busy");
+
+		expect(ctx.locallySubmittedUserSignatures.has("steer while busy\u00000")).toBe(true);
+		expect(spies.prompt).toHaveBeenCalledWith("steer while busy", {
+			streamingBehavior: "steer",
+			images: undefined,
+		});
+		expect(spies.updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 	});
 
 	it("marks streaming follow-up submissions as local", async () => {

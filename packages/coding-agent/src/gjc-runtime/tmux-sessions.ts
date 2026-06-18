@@ -8,6 +8,8 @@ import {
 	GJC_TMUX_PROFILE_OPTION,
 	GJC_TMUX_PROFILE_VALUE,
 	GJC_TMUX_PROJECT_OPTION,
+	GJC_TMUX_SESSION_ID_OPTION,
+	GJC_TMUX_SESSION_STATE_FILE_OPTION,
 	normalizeTmuxCreatedAt,
 	persistGjcTmuxOwnershipSidecar,
 	readGjcTmuxOwnershipSidecar,
@@ -25,17 +27,27 @@ export interface GjcTmuxSessionStatus {
 	branch?: string;
 	branchSlug?: string;
 	project?: string;
+	sessionId?: string;
+	sessionStateFile?: string;
+	panePids: number[];
+	profile?: string;
 }
 
 export interface GjcTmuxSessionTagsForGc {
 	profile?: string;
 	project?: string;
 	branch?: string;
+	branchSlug?: string;
+	sessionId?: string;
+	sessionStateFile?: string;
+	createdAt?: string;
+	attached?: boolean;
+	panePids?: number[];
 }
 
 export interface GjcTmuxSessionsForGc {
 	tagged: GjcTmuxSessionStatus[];
-	untagged: string[];
+	untagged: GjcTmuxSessionStatus[];
 }
 
 function runTmux(args: string[], env: NodeJS.ProcessEnv = process.env): string {
@@ -72,9 +84,12 @@ function parseSessionLine(line: string, env: NodeJS.ProcessEnv = process.env): G
 		profile = "",
 		bindings = "",
 		panes = "0",
+		panePids = "",
 		branch = "",
 		branchSlug = "",
 		project = "",
+		sessionId = "",
+		sessionStateFile = "",
 	] = line.split("\t");
 	if (!name) return null;
 	const createdAt = normalizeTmuxCreatedAt(created);
@@ -86,11 +101,18 @@ function parseSessionLine(line: string, env: NodeJS.ProcessEnv = process.env): G
 		attached: parseBooleanFlag(attached),
 		windows: parseNumber(windows),
 		panes: parseNumber(panes),
+		panePids: panePids
+			.split(",")
+			.map(pid => parseNumber(pid))
+			.filter(pid => pid > 0),
 		bindings,
 		createdAt,
 		branch: branch || ownershipSidecar?.branch || undefined,
 		branchSlug: branchSlug || ownershipSidecar?.branchSlug || undefined,
 		project: project || ownershipSidecar?.project || undefined,
+		profile: profile || (sidecarMatches ? GJC_TMUX_PROFILE_VALUE : undefined),
+		sessionId: sessionId || ownershipSidecar?.sessionId || undefined,
+		sessionStateFile: sessionStateFile || ownershipSidecar?.sessionStateFile || undefined,
 	};
 }
 
@@ -111,7 +133,7 @@ function runListSessions(format: string, env: NodeJS.ProcessEnv = process.env): 
 
 function listSessionLines(env: NodeJS.ProcessEnv = process.env): string[] {
 	return runListSessions(
-		`#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}\t#{${GJC_TMUX_PROFILE_OPTION}}\t#{session_key_table}\t#{session_panes}\t#{${GJC_TMUX_BRANCH_OPTION}}\t#{${GJC_TMUX_BRANCH_SLUG_OPTION}}\t#{${GJC_TMUX_PROJECT_OPTION}}`,
+		`#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}\t#{${GJC_TMUX_PROFILE_OPTION}}\t#{session_key_table}\t#{session_panes}\t#{pane_pid}\t#{${GJC_TMUX_BRANCH_OPTION}}\t#{${GJC_TMUX_BRANCH_SLUG_OPTION}}\t#{${GJC_TMUX_PROJECT_OPTION}}\t#{${GJC_TMUX_SESSION_ID_OPTION}}\t#{${GJC_TMUX_SESSION_STATE_FILE_OPTION}}`,
 		env,
 	);
 }
@@ -129,11 +151,29 @@ export function listGjcTmuxSessions(env: NodeJS.ProcessEnv = process.env): GjcTm
 
 /** @internal */
 export function listTmuxSessionsForGc(env: NodeJS.ProcessEnv = process.env): GjcTmuxSessionsForGc {
-	const tagged = listGjcTmuxSessions(env);
+	const sessions = listSessionLines(env)
+		.map(parseSessionLine)
+		.filter((session): session is GjcTmuxSessionStatus => session != null);
+	const tagged = sessions
+		.filter(session => session.profile === GJC_TMUX_PROFILE_VALUE)
+		.sort((a, b) => a.name.localeCompare(b.name));
 	const taggedNames = new Set(tagged.map(session => session.name));
+	const byName = new Map(sessions.map(session => [session.name, session]));
 	const untagged = listRawTmuxSessionNames(env)
 		.filter(name => !taggedNames.has(name))
-		.sort((a, b) => a.localeCompare(b));
+		.map(
+			name =>
+				byName.get(name) ?? {
+					name,
+					attached: false,
+					windows: 0,
+					panes: 0,
+					panePids: [],
+					bindings: "",
+					createdAt: "",
+				},
+		)
+		.sort((a, b) => a.name.localeCompare(b.name));
 	return { tagged, untagged };
 }
 
@@ -192,13 +232,6 @@ export function createGjcTmuxSession(env: NodeJS.ProcessEnv = process.env): GjcT
 	return session;
 }
 
-function readProfileForExactTarget(sessionName: string, env: NodeJS.ProcessEnv): string {
-	return runTmux(
-		["show-options", "-qv", "-t", buildGjcTmuxExactOptionTarget(sessionName), GJC_TMUX_PROFILE_OPTION],
-		env,
-	).trim();
-}
-
 function readExactOptionForGc(sessionName: string, option: string, env: NodeJS.ProcessEnv): string | undefined {
 	try {
 		return (
@@ -216,17 +249,28 @@ export function readTmuxSessionTagsForGc(
 	env: NodeJS.ProcessEnv = process.env,
 ): GjcTmuxSessionTagsForGc {
 	const ownershipSidecar = readGjcTmuxOwnershipSidecar(sessionName, env);
+	const session = listGjcTmuxSessions(env).find(candidate => candidate.name === sessionName);
 	return {
 		profile: readExactOptionForGc(sessionName, GJC_TMUX_PROFILE_OPTION, env) ?? (ownershipSidecar ? GJC_TMUX_PROFILE_VALUE : undefined),
 		project: readExactOptionForGc(sessionName, GJC_TMUX_PROJECT_OPTION, env) ?? ownershipSidecar?.project,
 		branch: readExactOptionForGc(sessionName, GJC_TMUX_BRANCH_OPTION, env) ?? ownershipSidecar?.branch,
+		branchSlug: readExactOptionForGc(sessionName, GJC_TMUX_BRANCH_SLUG_OPTION, env) ?? ownershipSidecar?.branchSlug,
+		sessionId: readExactOptionForGc(sessionName, GJC_TMUX_SESSION_ID_OPTION, env) ?? ownershipSidecar?.sessionId,
+		sessionStateFile:
+			readExactOptionForGc(sessionName, GJC_TMUX_SESSION_STATE_FILE_OPTION, env) ?? ownershipSidecar?.sessionStateFile,
+		createdAt: session?.createdAt,
+		attached: session?.attached,
+		panePids: session?.panePids,
 	};
 }
 
 export function removeGjcTmuxSession(sessionName: string, env: NodeJS.ProcessEnv = process.env): GjcTmuxSessionStatus {
 	const session = statusGjcTmuxSession(sessionName, env);
 	const sidecar = readGjcTmuxOwnershipSidecar(session.name, env);
-	if (readProfileForExactTarget(session.name, env) !== GJC_TMUX_PROFILE_VALUE && !sidecar) {
+	if (session.attached || session.panePids.length > 0) {
+		throw new Error(`gjc_tmux_session_live:${sessionName}`);
+	}
+	if ((readExactOptionForGc(session.name, GJC_TMUX_PROFILE_OPTION, env) ?? "") !== GJC_TMUX_PROFILE_VALUE && !sidecar) {
 		throw new Error(`gjc_tmux_session_not_managed:${sessionName}`);
 	}
 	runTmux(["kill-session", "-t", `=${session.name}`], env);

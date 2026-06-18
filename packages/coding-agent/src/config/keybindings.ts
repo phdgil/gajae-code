@@ -27,8 +27,10 @@ interface AppKeybindings {
 	"app.model.select": true;
 	"app.model.selectTemporary": true;
 	"app.tools.expand": true;
+	"app.tool.backgroundFold": true;
 	"app.editor.external": true;
 	"app.message.followUp": true;
+	"app.message.queue": true;
 	"app.message.dequeue": true;
 	"app.clipboard.pasteImage": true;
 	"app.clipboard.copyLine": true;
@@ -106,6 +108,10 @@ export const KEYBINDINGS = {
 		defaultKeys: "ctrl+o",
 		description: "Expand tools",
 	},
+	"app.tool.backgroundFold": {
+		defaultKeys: "ctrl+b",
+		description: "Fold/background supported foreground tool",
+	},
 	"app.editor.external": {
 		defaultKeys: "ctrl+g",
 		description: "Open external editor",
@@ -113,6 +119,10 @@ export const KEYBINDINGS = {
 	"app.message.followUp": {
 		defaultKeys: "ctrl+enter",
 		description: "Send follow-up message",
+	},
+	"app.message.queue": {
+		defaultKeys: "alt+enter",
+		description: "Queue message for next turn",
 	},
 	"app.message.dequeue": {
 		defaultKeys: "alt+up",
@@ -217,6 +227,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	toggleThinking: "app.thinking.toggle",
 	externalEditor: "app.editor.external",
 	followUp: "app.message.followUp",
+	queue: "app.message.queue",
 	dequeue: "app.message.dequeue",
 	pasteImage: "app.clipboard.pasteImage",
 	copyLine: "app.clipboard.copyLine",

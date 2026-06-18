@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { safeStderrWrite } from "@gajae-code/utils";
 import type { Args } from "../cli/args";
+import { GJC_COORDINATOR_SESSION_ID_ENV, GJC_COORDINATOR_SESSION_STATE_FILE_ENV } from "./session-state-sidecar";
 import {
 	buildGjcTmuxProfileCommands,
 	buildGjcTmuxSessionName,
@@ -28,6 +29,7 @@ export {
 
 export const GJC_TMUX_LAUNCHED_ENV = "GJC_TMUX_LAUNCHED";
 export const GJC_LAUNCH_POLICY_ENV = "GJC_LAUNCH_POLICY";
+export const GJC_TMUX_WINDOW_LABEL_MAX_WIDTH = 48;
 
 type LaunchPolicy = "direct" | "tmux";
 
@@ -79,6 +81,8 @@ export interface TmuxLaunchPlan {
 	branch?: string | null;
 	attachSessionName?: string;
 	project?: string | null;
+	sessionId?: string | null;
+	sessionStateFile?: string | null;
 }
 
 export interface GjcTmuxProfileResult {
@@ -96,12 +100,15 @@ export interface GjcTmuxProfileContext {
 	branch?: string | null;
 	branchSlug?: string | null;
 	project?: string | null;
+	sessionId?: string | null;
+	sessionStateFile?: string | null;
 }
 
 interface CommandResolutionContext {
 	cwd: string;
 	argv: string[];
 	execPath: string;
+	extraEnv?: Record<string, string>;
 }
 
 function parseLaunchPolicy(env: NodeJS.ProcessEnv): LaunchPolicy {
@@ -139,6 +146,11 @@ function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+function buildEnvAssignments(values: Record<string, string> | undefined): string {
+	const entries = Object.entries(values ?? {});
+	return entries.length === 0 ? "" : ` ${entries.map(([key, value]) => `${key}=${shellQuote(value)}`).join(" ")}`;
+}
+
 export function applyGjcTmuxProfile(context: GjcTmuxProfileContext): GjcTmuxProfileResult {
 	const env = context.env ?? process.env;
 	const branchSlug = context.branch ? buildGjcTmuxSessionSlug(context.branch) : (context.branchSlug ?? null);
@@ -146,6 +158,8 @@ export function applyGjcTmuxProfile(context: GjcTmuxProfileContext): GjcTmuxProf
 		branch: context.branch ?? null,
 		branchSlug,
 		project: context.project ?? null,
+		sessionId: context.sessionId ?? env[GJC_COORDINATOR_SESSION_ID_ENV] ?? null,
+		sessionStateFile: context.sessionStateFile ?? env[GJC_COORDINATOR_SESSION_STATE_FILE_ENV] ?? null,
 	});
 	if (commands.length === 0) return { skipped: true, commands: [], failures: [] };
 	const spawnSync = context.spawnSync ?? defaultSpawnSync;
@@ -175,7 +189,97 @@ function resolveCurrentGjcCommand(context: CommandResolutionContext): string[] {
 function buildInnerCommand(context: CommandResolutionContext, rawArgs: string[]): string {
 	const command = resolveCurrentGjcCommand(context);
 	const quoted = [...command, ...rawArgs].map(shellQuote).join(" ");
-	return `exec env ${GJC_TMUX_LAUNCHED_ENV}=1 ${quoted}`;
+	return `exec env ${GJC_TMUX_LAUNCHED_ENV}=1${buildEnvAssignments(context.extraEnv)} ${quoted}`;
+}
+
+function visibleWidth(value: string): number {
+	return Bun.stringWidth(value);
+}
+
+function truncateVisible(value: string, maxWidth: number): string {
+	if (maxWidth <= 0) return "";
+	if (visibleWidth(value) <= maxWidth) return value;
+	if (maxWidth === 1) return "…";
+
+	let result = "";
+	for (const char of value) {
+		if (visibleWidth(`${result}${char}…`) > maxWidth) break;
+		result += char;
+	}
+
+	return `${result}…`;
+}
+
+function truncateVisibleTail(value: string, maxWidth: number): string {
+	if (maxWidth <= 0) return "";
+	if (visibleWidth(value) <= maxWidth) return value;
+	if (maxWidth === 1) return "…";
+
+	let result = "";
+	for (const char of Array.from(value).reverse()) {
+		if (visibleWidth(`…${char}${result}`) > maxWidth) break;
+		result = `${char}${result}`;
+	}
+
+	return `…${result}`;
+}
+
+export function buildGjcTmuxWindowTitle(cwd: string, branch: string | null | undefined): string {
+	const project = path.basename(path.resolve(cwd)) || "gjc";
+	const trimmedBranch = branch?.trim();
+	if (!trimmedBranch) return truncateVisible(project, GJC_TMUX_WINDOW_LABEL_MAX_WIDTH);
+
+	const separatorWidth = visibleWidth(":");
+	const projectWidth = visibleWidth(project);
+	const fullTitle = `${project}:${trimmedBranch}`;
+	if (visibleWidth(fullTitle) <= GJC_TMUX_WINDOW_LABEL_MAX_WIDTH) return fullTitle;
+
+	const remainingBranchWidth = GJC_TMUX_WINDOW_LABEL_MAX_WIDTH - projectWidth - separatorWidth;
+	if (remainingBranchWidth <= 0) return truncateVisible(project, GJC_TMUX_WINDOW_LABEL_MAX_WIDTH);
+
+	return `${project}:${truncateVisibleTail(trimmedBranch, remainingBranchWidth)}`;
+}
+
+function buildTmuxRenameWindowArgs(title: string, target?: string): string[] {
+	return target ? ["rename-window", "-t", target, "--", title] : ["rename-window", "--", title];
+}
+
+function renameTmuxWindow(
+	tmuxCommand: string,
+	title: string,
+	spawnSync: TmuxSpawnSync,
+	options: TmuxSpawnOptions,
+	target?: string,
+): void {
+	spawnSync(tmuxCommand, buildTmuxRenameWindowArgs(title, target), options);
+}
+
+function renameExistingTmuxWindowIfNeeded(context: TmuxLaunchContext): void {
+	const env = context.env ?? process.env;
+	if (!env.TMUX || env[GJC_TMUX_LAUNCHED_ENV] === "1") return;
+	if (parseLaunchPolicy(env) === "direct") return;
+
+	const platform = context.platform ?? process.platform;
+	if (platform === "win32") return;
+
+	const tty = context.tty ?? { stdin: Boolean(process.stdin.isTTY), stdout: Boolean(process.stdout.isTTY) };
+	if (!isInteractiveRootLaunch(context.parsed, tty)) return;
+
+	const tmuxCommand = resolveGjcTmuxCommand(env);
+	const tmuxAvailable = context.tmuxAvailable ?? Bun.which(tmuxCommand) !== null;
+	if (!tmuxAvailable) return;
+
+	const cwd = context.cwd ?? process.cwd();
+	const branch = context.worktreeBranch ?? context.currentBranch ?? readCurrentBranch(cwd);
+	const title = buildGjcTmuxWindowTitle(context.project ?? cwd, branch);
+	const spawnSync = context.spawnSync ?? defaultSpawnSync;
+	renameTmuxWindow(tmuxCommand, title, spawnSync, {
+		cwd,
+		env,
+		stdin: "inherit",
+		stdout: "inherit",
+		stderr: "inherit",
+	});
 }
 
 function readCurrentBranch(cwd: string): string | null {
@@ -210,6 +314,10 @@ export function buildDefaultTmuxLaunchPlan(context: TmuxLaunchContext): TmuxLaun
 	const project = context.project ?? cwd;
 	const sessionName = buildGjcTmuxSessionName(env, { branch });
 	const tmuxCommand = resolveGjcTmuxCommand(env);
+	const sessionId = env[GJC_COORDINATOR_SESSION_ID_ENV]?.trim() || sessionName;
+	const sessionStateFile =
+		env[GJC_COORDINATOR_SESSION_STATE_FILE_ENV]?.trim() ||
+		path.join(cwd, ".gjc", "runtime", "tmux-sessions", `${buildGjcTmuxSessionSlug(sessionName)}.json`);
 	const tmuxAvailable = context.tmuxAvailable ?? Bun.which(tmuxCommand) !== null;
 	if (!tmuxAvailable) return undefined;
 	const existingBranchSessionName =
@@ -223,6 +331,10 @@ export function buildDefaultTmuxLaunchPlan(context: TmuxLaunchContext): TmuxLaun
 			cwd,
 			argv: context.argv ?? process.argv,
 			execPath: context.execPath ?? process.execPath,
+			extraEnv: {
+				[GJC_COORDINATOR_SESSION_ID_ENV]: sessionId,
+				[GJC_COORDINATOR_SESSION_STATE_FILE_ENV]: sessionStateFile,
+			},
 		},
 		context.rawArgs,
 	);
@@ -234,6 +346,8 @@ export function buildDefaultTmuxLaunchPlan(context: TmuxLaunchContext): TmuxLaun
 		newSessionArgs: ["new-session", "-d", "-s", sessionName, "-c", cwd, innerCommand],
 		branch,
 		project,
+		sessionId,
+		sessionStateFile,
 		attachSessionName: existingBranchSessionName,
 	};
 }
@@ -251,6 +365,8 @@ function defaultSpawnSync(command: string, args: string[], options: TmuxSpawnOpt
 }
 
 export function launchDefaultTmuxIfNeeded(context: TmuxLaunchContext): boolean {
+	renameExistingTmuxWindowIfNeeded(context);
+
 	const plan = buildDefaultTmuxLaunchPlan(context);
 	if (!plan) return false;
 	const env = context.env ?? process.env;
@@ -262,10 +378,12 @@ export function launchDefaultTmuxIfNeeded(context: TmuxLaunchContext): boolean {
 		stdout: "inherit",
 		stderr: "inherit",
 	};
+
 	if (plan.attachSessionName) {
 		const attached = spawnSync(plan.tmuxCommand, ["attach-session", "-t", `=${plan.attachSessionName}`], options);
 		return attached.exitCode === 0;
 	}
+
 	const created = spawnSync(plan.tmuxCommand, plan.newSessionArgs, options);
 	if (created.exitCode === 0) {
 		persistGjcTmuxOwnershipSidecar(
@@ -274,9 +392,18 @@ export function launchDefaultTmuxIfNeeded(context: TmuxLaunchContext): boolean {
 				branch: plan.branch ?? undefined,
 				branchSlug: plan.branch ? buildGjcTmuxSessionSlug(plan.branch) : undefined,
 				project: plan.project ?? undefined,
+				sessionId: plan.sessionId ?? undefined,
+				sessionStateFile: plan.sessionStateFile ?? undefined,
 				tmuxCommand: plan.tmuxCommand,
 			},
 			env,
+		);
+		renameTmuxWindow(
+			plan.tmuxCommand,
+			buildGjcTmuxWindowTitle(plan.project ?? plan.cwd, plan.branch),
+			spawnSync,
+			options,
+			`=${plan.sessionName}`,
 		);
 		const profile = applyGjcTmuxProfile({
 			tmuxCommand: plan.tmuxCommand,
@@ -286,6 +413,8 @@ export function launchDefaultTmuxIfNeeded(context: TmuxLaunchContext): boolean {
 			spawnSync,
 			branch: plan.branch,
 			project: plan.project,
+			sessionId: plan.sessionId ?? null,
+			sessionStateFile: plan.sessionStateFile ?? null,
 		});
 		if (profile.failures.length > 0) {
 			cleanupCreatedTmuxSession(plan, spawnSync, options);

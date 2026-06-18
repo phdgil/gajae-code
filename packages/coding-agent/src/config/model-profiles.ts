@@ -6,6 +6,17 @@ export type ModelProfileRole = GjcModelAssignmentTargetId;
 export interface ModelProfileDefinition {
 	name: string;
 	requiredProviders: string[];
+	displayName?: string;
+	/**
+	 * Optional groups of providers that are interchangeable fallbacks.
+	 * Each group is an array of provider ids where at least one must be
+	 * authenticated. Providers NOT in any group are treated as strict
+	 * requirements (all must be authenticated).
+	 *
+	 * Example: `[["xiaomi", "xiaomi-token-plan-sgp", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn"]]`
+	 * means any single xiaomi credential satisfies the group.
+	 */
+	alternativeProviderGroups?: readonly (readonly string[])[];
 	modelMapping: Partial<Record<ModelProfileRole, string>>;
 	source: "builtin" | "user";
 }
@@ -46,9 +57,11 @@ const profile = (
 	name: string,
 	requiredProviders: string[],
 	modelMapping: Record<ModelProfileRole, string>,
+	alternativeProviderGroups?: readonly (readonly string[])[],
 ): ModelProfileDefinition => ({
 	name,
 	requiredProviders: aggregateModelProfileRequiredProviders(requiredProviders, { modelMapping }),
+	alternativeProviderGroups,
 	modelMapping,
 	source: "builtin",
 });
@@ -138,20 +151,30 @@ export const BUILTIN_MODEL_PROFILES: readonly ModelProfileDefinition[] = [
 		critic: "xiaomi/mimo-v2.5-pro:medium",
 		architect: "xiaomi/mimo-v2.5-pro:high",
 	}),
-	profile("mimo-medium", ["xiaomi"], {
-		default: "xiaomi/mimo-v2.5-pro:medium",
-		executor: "xiaomi/mimo-v2.5-pro:low",
-		planner: "xiaomi/mimo-v2.5-pro:medium",
-		critic: "xiaomi/mimo-v2.5-pro:high",
-		architect: "xiaomi/mimo-v2.5-pro:xhigh",
-	}),
-	profile("mimo-pro", ["xiaomi"], {
-		default: "xiaomi/mimo-v2.5-pro:xhigh",
-		executor: "xiaomi/mimo-v2.5-pro:medium",
-		planner: "xiaomi/mimo-v2.5-pro:high",
-		critic: "xiaomi/mimo-v2.5-pro:xhigh",
-		architect: "xiaomi/mimo-v2.5-pro:xhigh",
-	}),
+	profile(
+		"mimo-medium",
+		["xiaomi", "xiaomi-token-plan-sgp", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn"],
+		{
+			default: "xiaomi/mimo-v2.5-pro:medium",
+			executor: "xiaomi/mimo-v2.5-pro:low",
+			planner: "xiaomi/mimo-v2.5-pro:medium",
+			critic: "xiaomi/mimo-v2.5-pro:high",
+			architect: "xiaomi/mimo-v2.5-pro:xhigh",
+		},
+		[["xiaomi", "xiaomi-token-plan-sgp", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn"]],
+	),
+	profile(
+		"mimo-pro",
+		["xiaomi", "xiaomi-token-plan-sgp", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn"],
+		{
+			default: "xiaomi/mimo-v2.5-pro:xhigh",
+			executor: "xiaomi/mimo-v2.5-pro:medium",
+			planner: "xiaomi/mimo-v2.5-pro:high",
+			critic: "xiaomi/mimo-v2.5-pro:xhigh",
+			architect: "xiaomi/mimo-v2.5-pro:xhigh",
+		},
+		[["xiaomi", "xiaomi-token-plan-sgp", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn"]],
+	),
 	profile("grok-eco", ["xai"], {
 		default: "xai/grok-4.3:low",
 		executor: "xai/grok-4.3:minimal",
@@ -292,14 +315,23 @@ const PROFILE_RECOMMENDATIONS: Record<string, string> = {
 	zai: "glm-medium",
 	"kimi-code": "kimi-coding-plan-medium",
 	xiaomi: "mimo-medium",
+	"xiaomi-token-plan-sgp": "mimo-medium",
+	"xiaomi-token-plan-ams": "mimo-medium",
+	"xiaomi-token-plan-cn": "mimo-medium",
 	xai: "grok-medium",
 	"grok-build": "grok-build-pro",
 	cursor: "cursor-medium",
 	"minimax-code": "minimax-medium",
 };
 
-export function getModelProfilePresentation(name: string): ModelProfilePresentation {
-	return PROFILE_PRESENTATION[name] ?? { displayName: name, providerGroup: "COMBOS" };
+export function getModelProfilePresentation(
+	profile: string | Pick<ModelProfileDefinition, "name" | "displayName">,
+): ModelProfilePresentation {
+	const name = typeof profile === "string" ? profile : profile.name;
+	const displayName = typeof profile === "string" ? undefined : profile.displayName;
+	const presentation = PROFILE_PRESENTATION[name];
+	if (presentation) return presentation;
+	return { displayName: displayName ?? name, providerGroup: "CUSTOM" };
 }
 
 export function groupModelProfilesForPresetLanding(
@@ -308,7 +340,7 @@ export function groupModelProfilesForPresetLanding(
 	const groups = new Map<string, ModelProfileDefinition[]>();
 	for (const group of PROFILE_GROUP_ORDER) groups.set(group, []);
 	for (const profile of profiles.values()) {
-		const group = getModelProfilePresentation(profile.name).providerGroup;
+		const group = getModelProfilePresentation(profile).providerGroup;
 		if (!groups.has(group)) groups.set(group, []);
 		groups.get(group)?.push(profile);
 	}
@@ -340,6 +372,7 @@ export function mergeModelProfiles(userProfiles?: ModelsConfig["profiles"]): Map
 		const modelMapping = { ...definition.model_mapping };
 		profiles.set(name, {
 			name,
+			displayName: definition.display_name,
 			requiredProviders: aggregateModelProfileRequiredProviders(definition.required_providers, { modelMapping }),
 			modelMapping,
 			source: "user",

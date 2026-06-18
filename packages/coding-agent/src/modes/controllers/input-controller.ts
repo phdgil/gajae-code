@@ -34,6 +34,8 @@ function isExpandable(obj: unknown): obj is Expandable {
 export class InputController {
 	constructor(private ctx: InteractiveModeContext) {}
 
+	#lastBackgroundFoldKeyTime = 0;
+
 	/** Set after a first Esc silently consumes a queued steer. Kept until the
 	 *  queued steer is either cancelled by a second Esc or drained by continuation,
 	 *  so abort cleanup going idle cannot turn the second Esc into an idle action. */
@@ -83,6 +85,20 @@ export class InputController {
 					return;
 				}
 				this.#steerConsumePending = false;
+			}
+			// Normal input state with user-typed text: Esc must not interrupt a
+			// running task (streaming turn, bash/eval). A double Esc within the
+			// 500ms window clears the composer instead. Bash/Python input modes
+			// keep their own Esc handling in the chain below.
+			if (!this.ctx.isBashMode && !this.ctx.isPythonMode && this.ctx.editor.getText().trim()) {
+				const now = Date.now();
+				if (now - this.ctx.lastComposerClearEscapeTime < 500) {
+					this.ctx.clearEditor();
+					this.ctx.lastComposerClearEscapeTime = 0;
+				} else {
+					this.ctx.lastComposerClearEscapeTime = now;
+				}
+				return;
 			}
 			if (this.ctx.loadingAnimation) {
 				if (this.ctx.cancelPendingSubmission()) {
@@ -181,6 +197,8 @@ export class InputController {
 		this.ctx.editor.onExpandTools = () => this.toggleToolOutputExpansion();
 		this.ctx.editor.setActionKeys("app.message.dequeue", this.ctx.keybindings.getKeys("app.message.dequeue"));
 		this.ctx.editor.onDequeue = () => this.handleDequeue();
+		this.ctx.editor.setActionKeys("app.message.queue", this.ctx.keybindings.getKeys("app.message.queue"));
+		this.ctx.editor.onQueue = () => void this.handleQueueSubmit();
 
 		this.ctx.editor.clearCustomKeyHandlers();
 		// Wire up extension shortcuts
@@ -192,16 +210,22 @@ export class InputController {
 		}
 
 		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleClearCommand());
+			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleClearCommand());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.session.tree")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showTreeSelector());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showTreeSelector();
+			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.session.fork")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showUserMessageSelector());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showUserMessageSelector();
+			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.session.resume")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showSessionSelector());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showSessionSelector();
+			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.message.followUp")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.handleFollowUp());
@@ -210,13 +234,22 @@ export class InputController {
 			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handleSTTToggle());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.clipboard.copyLine")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.handleCopyCurrentLine());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.handleCopyCurrentLine();
+			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.session.observe")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showSessionObserver());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showSessionObserver();
+			});
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.jobs.open")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showJobsOverlay());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				this.ctx.showJobsOverlay();
+			});
+		}
+		for (const key of this.ctx.keybindings.getKeys("app.tool.backgroundFold")) {
+			this.ctx.editor.setCustomKeyHandler(key, () => this.handleForegroundToolBackgroundFold());
 		}
 
 		this.ctx.editor.onChange = (text: string) => {
@@ -297,8 +330,8 @@ export class InputController {
 			// Handle skill commands (/skill:name [args]). While streaming, Enter
 			// honors `busyPromptMode`: "steer" interrupts the active turn, "queue"
 			// runs after it completes (matches the free-text Enter semantics applied
-			// a few lines below at the streaming branch). Ctrl+Enter always routes
-			// through `handleFollowUp` and dispatches the same helper with `"followUp"`.
+			// a few lines below at the streaming branch). Explicit queue shortcuts
+			// route through `handleFollowUp` and dispatch as `followUp`.
 			if (await this.#invokeSkillCommand(text, this.#busyStreamingBehavior())) {
 				return;
 			}
@@ -467,7 +500,7 @@ export class InputController {
 	 * completes (in submission order). Only consulted while streaming.
 	 */
 	#busyStreamingBehavior(): "steer" | "followUp" {
-		return this.ctx.settings.get("busyPromptMode") === "queue" ? "followUp" : "steer";
+		return this.ctx.settings.get("busyPromptMode") === "steer" ? "steer" : "followUp";
 	}
 
 	/**
@@ -566,7 +599,7 @@ export class InputController {
 
 		// Skill commands invoke through the custom-message path regardless of
 		// which keybinding submitted them. Enter routes them as `steer`;
-		// Ctrl+Enter (this handler) routes them as `followUp`.
+		// explicit queue shortcuts route them as `followUp`.
 		if (await this.#invokeSkillCommand(text, "followUp")) {
 			return;
 		}
@@ -586,6 +619,11 @@ export class InputController {
 		this.ctx.editor.addToHistory(text);
 		this.ctx.editor.setText("");
 		await this.ctx.withLocalSubmission(text, () => this.ctx.session.prompt(text));
+	}
+
+	/** Send editor text explicitly as a queued next-turn message. */
+	async handleQueueSubmit(): Promise<void> {
+		return this.handleFollowUp();
 	}
 
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
@@ -674,6 +712,31 @@ export class InputController {
 		}
 
 		process.kill(0, "SIGTSTP");
+	}
+
+	handleForegroundToolBackgroundFold(): boolean {
+		if (!this.ctx.session.hasForegroundBashBackgroundRequestHandler?.()) {
+			this.#lastBackgroundFoldKeyTime = 0;
+			return false;
+		}
+
+		const now = Date.now();
+		if (now - this.#lastBackgroundFoldKeyTime > 750) {
+			this.#lastBackgroundFoldKeyTime = now;
+			this.ctx.showStatus("Press Ctrl+B again to fold supported foreground bash into a background job");
+			return true;
+		}
+		this.#lastBackgroundFoldKeyTime = 0;
+
+		if (!this.ctx.session.requestForegroundBashBackground?.()) {
+			this.ctx.showWarning(
+				"No supported foreground tool can be folded. Use managed async bash/auto-background; raw Ctrl+Z/bg is not supported inside the TUI.",
+			);
+			return true;
+		}
+
+		this.ctx.showStatus("Folding foreground bash into a quiet background job…");
+		return true;
 	}
 
 	handleTextPaste(text: string): boolean | Promise<boolean> {
@@ -887,6 +950,11 @@ export class InputController {
 		this.ctx.session.agent.hideThinkingSummary = this.ctx.hideThinkingBlock;
 
 		// Rebuild chat from session messages
+		// Detach the live streaming component before the disposing clear() so the
+		// component we re-add below is not torn down (detach != dispose).
+		if (this.ctx.streamingComponent) {
+			this.ctx.chatContainer.detachChild(this.ctx.streamingComponent);
+		}
 		this.ctx.chatContainer.clear();
 		this.ctx.rebuildChatFromMessages();
 

@@ -21,6 +21,12 @@ const DEFAULT_TAB_NAME = "main";
 const appSchema = z.object({
 	path: z.string().describe("binary path to spawn").optional(),
 	cdp_url: z.string().describe("existing cdp endpoint").optional(),
+	browser: z.enum(["chrome"]).describe("existing browser profile mode").optional(),
+	user_data_dir: z.string().describe("Chrome user data directory containing profiles").optional(),
+	profile_directory: z.string().describe("Chrome profile directory name, e.g. Profile 10").optional(),
+	background: z.boolean().describe("prefer background/hidden Chrome profile launch when supported").optional(),
+	no_focus: z.boolean().describe("avoid focusing Chrome during profile launch when supported").optional(),
+	cdp_port: z.number().int().positive().describe("local CDP port for launched Chrome profile").optional(),
 	args: z.array(z.string()).describe("extra cli args").optional(),
 	target: z.string().describe("substring to pick a window").optional(),
 });
@@ -104,10 +110,30 @@ export interface BrowserToolDetails {
 	meta?: OutputMeta;
 }
 
+export function resolveBrowserKindForTest(params: BrowserParams, session: ToolSession): BrowserKind {
+	return resolveBrowserKind(params, session);
+}
+
 function resolveBrowserKind(params: BrowserParams, session: ToolSession): BrowserKind {
 	const app = params.app;
 	if (app?.cdp_url) {
 		return { kind: "connected", cdpUrl: app.cdp_url.replace(/\/+$/, "") };
+	}
+	if (app?.browser === "chrome") {
+		if (!app.path) throw new ToolError('app.path is required when app.browser is "chrome".');
+		if (!app.user_data_dir) throw new ToolError('app.user_data_dir is required when app.browser is "chrome".');
+		if (!app.profile_directory)
+			throw new ToolError('app.profile_directory is required when app.browser is "chrome".');
+		const exe = resolveToCwd(app.path, session.cwd);
+		return {
+			kind: "chrome-profile",
+			path: exe,
+			userDataDir: resolveToCwd(app.user_data_dir, session.cwd),
+			profileDirectory: app.profile_directory,
+			background: app.background ?? false,
+			noFocus: app.no_focus ?? false,
+			cdpPort: app.cdp_port,
+		};
 	}
 	if (app?.path) {
 		const exe = resolveToCwd(app.path, session.cwd);
@@ -213,6 +239,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 
 		const result = await untilAborted(signal, () =>
 			acquireTab(name, browser, {
+				ownerId: this.session.getSessionId?.() ?? undefined,
 				url: params.url,
 				waitUntil: params.wait_until,
 				viewport: params.viewport
@@ -357,6 +384,8 @@ function describeBrowser(handle: BrowserHandle): string {
 			return `headless browser (${handle.kind.headless ? "hidden" : "visible"})`;
 		case "spawned":
 			return `spawned ${handle.kind.path} (pid ${handle.pid ?? "?"})`;
+		case "chrome-profile":
+			return `Chrome profile ${handle.kind.profileDirectory} at ${handle.kind.userDataDir} (${handle.subprocess ? `pid ${handle.pid ?? "?"}` : "external CDP"})`;
 		case "connected":
 			return `connected ${handle.cdpUrl ?? handle.kind.cdpUrl}`;
 	}
@@ -368,6 +397,8 @@ function describeKind(kind: BrowserKind): string {
 			return `headless ${kind.headless ? "hidden" : "visible"}`;
 		case "spawned":
 			return `spawned:${kind.path}`;
+		case "chrome-profile":
+			return `chrome-profile:${kind.path}:${kind.userDataDir}:${kind.profileDirectory}`;
 		case "connected":
 			return `connected:${kind.cdpUrl}`;
 	}
@@ -377,15 +408,51 @@ function sameBrowserKind(a: BrowserKind, b: BrowserKind): boolean {
 	if (a.kind !== b.kind) return false;
 	if (a.kind === "headless" && b.kind === "headless") return a.headless === b.headless;
 	if (a.kind === "spawned" && b.kind === "spawned") return a.path === b.path;
+	if (a.kind === "chrome-profile" && b.kind === "chrome-profile") {
+		return a.path === b.path && a.userDataDir === b.userDataDir && a.profileDirectory === b.profileDirectory;
+	}
 	if (a.kind === "connected" && b.kind === "connected") return a.cdpUrl === b.cdpUrl;
 	return false;
 }
 
+/** Max chars of a browser return value surfaced into the tool result (F22). */
+const MAX_BROWSER_RETURN_CHARS = 256 * 1024;
+
+const BROWSER_RETURN_BUDGET_EXCEEDED = Symbol("browser-return-budget-exceeded");
+
+/** Hard-cap any surfaced browser return string at the byte/char limit with a notice. */
+function capBrowserReturn(text: string): string {
+	if (text.length <= MAX_BROWSER_RETURN_CHARS) return text;
+	return `${text.slice(0, MAX_BROWSER_RETURN_CHARS)}\n\n[Browser return value truncated: ${text.length} chars exceeds the ${MAX_BROWSER_RETURN_CHARS}-char cap.]`;
+}
+
 function stringifyReturnValue(value: unknown): string {
-	if (typeof value === "string") return value;
+	if (typeof value === "string") return capBrowserReturn(value);
+	// F22: bound the serialization itself — the replacer tracks running size and aborts early so a
+	// huge object/array cannot build megabytes before truncation — AND hard-cap the final string,
+	// since pretty-print structural overhead (indent/braces/commas) is not counted by the budget.
+	let budget = MAX_BROWSER_RETURN_CHARS;
 	try {
-		return JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		return String(value);
+		const text = JSON.stringify(
+			value,
+			(_key, val) => {
+				if (typeof val === "string") budget -= val.length + 4;
+				else if (typeof val === "number" || typeof val === "boolean") budget -= 8;
+				else budget -= 2;
+				if (budget < 0) throw BROWSER_RETURN_BUDGET_EXCEEDED;
+				return val;
+			},
+			2,
+		);
+		return text === undefined ? capBrowserReturn(String(value)) : capBrowserReturn(text);
+	} catch (error) {
+		if (error === BROWSER_RETURN_BUDGET_EXCEEDED) {
+			return `[Browser return value too large to serialize (exceeds the ${MAX_BROWSER_RETURN_CHARS}-char cap). Return a smaller or summarized value from the page script.]`;
+		}
+		try {
+			return capBrowserReturn(String(value));
+		} catch {
+			return "[unserializable browser return value]";
+		}
 	}
 }
