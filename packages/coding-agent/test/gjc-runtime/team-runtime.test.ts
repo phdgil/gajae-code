@@ -98,6 +98,69 @@ esac
 	return path.join(binDir, "tmux");
 }
 
+async function createFakePsmuxBin(root: string): Promise<string> {
+	const binDir = path.join(root, ".test-bin-psmux");
+	await fs.mkdir(binDir, { recursive: true });
+	const logPath = path.join(root, "psmux.log");
+	const paneFile = path.join(root, "psmux-panes");
+	const countFile = path.join(root, "psmux-count");
+	await Bun.write(paneFile, "%1\n");
+	await Bun.write(countFile, "1\n");
+	const script = `#!/usr/bin/env bash
+echo "$@" >> ${JSON.stringify(logPath)}
+case "$1" in
+  display-message)
+    target=""
+    for ((i=1; i<=$#; i++)); do
+      if [ "\${!i}" = "-t" ]; then
+        next=$((i + 1))
+        target="\${!next}"
+      fi
+    done
+    case "$target" in
+      %2) echo "test-session:0 %2" ;;
+      %3) echo "test-session:0 %3" ;;
+      *) echo "test-session:0 %1" ;;
+    esac
+    ;;
+  show-options)
+    echo "1"
+    ;;
+  set-option|set-window-option|select-layout|kill-pane)
+    exit 0
+    ;;
+	list-panes)
+    index=0
+    while IFS= read -r pane; do
+      echo -e "$pane\\t$index"
+      index=$((index + 1))
+    done < ${JSON.stringify(paneFile)}
+    ;;
+  split-window)
+    for arg in "$@"; do
+      if [ "$arg" = "-P" ] || [ "$arg" = "-F" ]; then
+        echo "psmux does not support print-format split flags" >&2
+        exit 2
+      fi
+    done
+    count=$(cat ${JSON.stringify(countFile)})
+    count=$((count + 1))
+    echo "$count" > ${JSON.stringify(countFile)}
+    echo "%$count" >> ${JSON.stringify(paneFile)}
+    ;;
+  send-keys)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`;
+	await Bun.write(path.join(binDir, "psmux"), script);
+	await fs.chmod(path.join(binDir, "psmux"), 0o755);
+	return path.join(binDir, "psmux");
+}
+
 async function createGitRepo(): Promise<string> {
 	const repo = await fs.mkdtemp(path.join(os.tmpdir(), "gjc-team-runtime-git-"));
 	runGit(repo, ["init"]);
@@ -461,6 +524,34 @@ describe("native gjc team runtime", () => {
 		expect(tmuxLog).not.toContain("set-option -g");
 		expect(tmuxLog).not.toContain("new-session");
 		expect(tmuxLog).not.toContain("kill-session");
+	});
+
+	it("starts workers through psmux without tmux split print flags or POSIX env assignment", async () => {
+		cleanupRoot = await createGitRepo();
+		const fakePsmux = await createFakePsmuxBin(cleanupRoot);
+		const snapshot = await startGjcTeam({
+			workerCount: 2,
+			agentType: "executor",
+			task: "Use psmux worker panes",
+			teamName: "psmux-team",
+			cwd: cleanupRoot,
+			env: { PATH: process.env.PATH ?? "", GJC_TEAM_WORKER_COMMAND: "gjc", GJC_TEAM_TMUX_COMMAND: fakePsmux },
+		});
+
+		expect(snapshot.workers.map(worker => worker.pane_id)).toEqual(["%2", "%3"]);
+		const psmuxLog = await Bun.file(path.join(cleanupRoot, "psmux.log")).text();
+		expect(psmuxLog).toContain("split-window -h -t %1 -d -c");
+		expect(psmuxLog).toContain("split-window -v -t test-session:0.1 -d -c");
+		expect(psmuxLog).not.toContain(" -P ");
+		expect(psmuxLog).not.toContain(" -F ");
+		expect(psmuxLog).toContain("send-keys -t test-session:0.1");
+		expect(psmuxLog).toContain("send-keys -t test-session:0.2");
+
+		const workerScript = await Bun.file(path.join(snapshot.state_dir, "workers", "worker-1", "launch-worker.ps1")).text();
+		expect(workerScript).toContain("$env:GJC_TEAM_WORKER_ID = 'worker-1'");
+		expect(workerScript).toContain("Invoke-Expression");
+		expect(workerScript).toContain("gjc 'You are worker-1 in gjc team psmux-team.");
+		expect(workerScript).not.toContain("GJC_TEAM_WORKER='psmux-team/worker-1' gjc");
 	});
 
 	it("resolves the team tmux leader from GJC_TMUX_COMMAND, not only GJC_TEAM_TMUX_COMMAND", async () => {

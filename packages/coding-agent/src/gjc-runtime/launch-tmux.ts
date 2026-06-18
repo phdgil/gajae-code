@@ -7,6 +7,7 @@ import {
 	buildGjcTmuxSessionName,
 	buildGjcTmuxSessionSlug,
 	GJC_DEFAULT_TMUX_SESSION,
+	GJC_TMUX_ACTIVE_SESSION_ENV,
 	GJC_TMUX_COMMAND_ENV,
 	GJC_TMUX_MOUSE_ENV,
 	GJC_TMUX_PROFILE_ENV,
@@ -334,6 +335,7 @@ export function buildDefaultTmuxLaunchPlan(context: TmuxLaunchContext): TmuxLaun
 			extraEnv: {
 				[GJC_COORDINATOR_SESSION_ID_ENV]: sessionId,
 				[GJC_COORDINATOR_SESSION_STATE_FILE_ENV]: sessionStateFile,
+				[GJC_TMUX_ACTIVE_SESSION_ENV]: existingBranchSessionName ?? sessionName,
 			},
 		},
 		context.rawArgs,

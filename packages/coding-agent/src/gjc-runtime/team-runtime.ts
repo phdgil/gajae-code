@@ -21,6 +21,7 @@ import {
 import {
 	buildGjcTmuxExactOptionTarget,
 	buildGjcTmuxUntaggedSessionHint,
+	GJC_TMUX_ACTIVE_SESSION_ENV,
 	GJC_TMUX_PROFILE_OPTION,
 	GJC_TMUX_PROFILE_VALUE,
 	readGjcTmuxOwnershipSidecar,
@@ -587,6 +588,12 @@ function teamDir(stateRoot: string, teamName: string): string {
 }
 function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+function powershellSingleQuote(value: string): string {
+	return `'${value.replace(/'/g, "''")}'`;
+}
+function isPsmuxCommand(command: string): boolean {
+	return path.basename(command).toLowerCase().replace(/\.exe$/, "") === "psmux";
 }
 function safePathSegment(kind: string, value: string): string {
 	assertSafeId(kind, value);
@@ -1834,9 +1841,12 @@ function retagGjcLaunchedTmuxSession(tmuxCommand: string, sessionName: string): 
 
 function readCurrentTmuxLeaderContext(tmuxCommand: string, env: NodeJS.ProcessEnv): GjcTmuxLeaderContext {
 	const paneTarget = env.TMUX_PANE?.trim();
-	const args = paneTarget
-		? ["display-message", "-p", "-t", paneTarget, "#S:#I #{pane_id}"]
-		: ["display-message", "-p", "#S:#I #{pane_id}"];
+	const activePsmuxSession = isPsmuxCommand(tmuxCommand) ? env[GJC_TMUX_ACTIVE_SESSION_ENV]?.trim() : undefined;
+	const args = activePsmuxSession
+		? ["display-message", "-p", "-t", buildGjcTmuxExactOptionTarget(activePsmuxSession), "#S:#I #{pane_id}"]
+		: paneTarget
+			? ["display-message", "-p", "-t", paneTarget, "#S:#I #{pane_id}"]
+			: ["display-message", "-p", "#S:#I #{pane_id}"];
 	const result = Bun.spawnSync([tmuxCommand, ...args], { stdout: "pipe", stderr: "pipe" });
 	if (result.exitCode !== 0) throw new Error(buildTeamTmuxLeaderRequirementMessage(result.stderr.toString()));
 	const [sessionAndWindow = "", leaderPaneId = ""] = result.stdout.toString().trim().split(/\s+/);
@@ -1895,6 +1905,38 @@ function buildWorkerCommand(config: GjcTeamConfig, worker: GjcTeamWorker): strin
 		...(worker.worktree_path ? [`GJC_TEAM_WORKTREE_PATH=${shellQuote(worker.worktree_path)}`] : []),
 	];
 	return `${env.join(" ")} ${config.worker_command} ${shellQuote(prompt)}`;
+}
+async function buildPsmuxWorkerLaunchCommand(config: GjcTeamConfig, worker: GjcTeamWorker, dir: string): Promise<string> {
+	const workspace = worker.worktree_path ?? config.leader.cwd;
+	const prompt = [
+		`You are ${worker.id} in gjc team ${config.team_name}.`,
+		`Team state root: ${config.state_root}.`,
+		worker.worktree_path ? `Worker worktree: ${worker.worktree_path}.` : `Worker cwd: ${config.leader.cwd}.`,
+		`Team brief (context only): ${config.task}`,
+		"Before implementation, claim your worker-owned task and treat the claimed task record as the source of truth. Do not implement directly from the broad team brief.",
+		`Before claiming work, send startup ACK: gjc team api worker-startup-ack --input '{"team_name":"${config.team_name}","worker_id":"${worker.id}","protocol_version":"1"}' --json.`,
+		`Use gjc team api update-worker-status to report task-local activity, then claim-task/transition-task-status with this worker id; keep heartbeat current during long work, record completion_evidence (summary plus a passed command or verified inspection/artifact item) before completed, and do not mutate leader-owned goal state.`,
+	].join("\n");
+	const scriptPath = path.join(workerDir(dir, worker.id), "launch-worker.ps1");
+	await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+	const commandLine = `${config.worker_command} ${powershellSingleQuote(prompt)}`;
+	const script = [
+		"$ErrorActionPreference = 'Continue'",
+		`Set-Location -LiteralPath ${powershellSingleQuote(workspace)}`,
+		`$env:GJC_TEAM_WORKER = ${powershellSingleQuote(`${config.team_name}/${worker.id}`)}`,
+		`$env:GJC_TEAM_INTERNAL_WORKER = ${powershellSingleQuote(`${config.team_name}/${worker.id}`)}`,
+		`$env:GJC_TEAM_NAME = ${powershellSingleQuote(config.team_name)}`,
+		`$env:GJC_TEAM_WORKER_ID = ${powershellSingleQuote(worker.id)}`,
+		`$env:GJC_TEAM_STATE_ROOT = ${powershellSingleQuote(config.state_root)}`,
+		`$env:GJC_TEAM_LEADER_CWD = ${powershellSingleQuote(config.leader.cwd)}`,
+		`$env:GJC_TEAM_DISPLAY_NAME = ${powershellSingleQuote(config.display_name)}`,
+		...(worker.worktree_path ? [`$env:GJC_TEAM_WORKTREE_PATH = ${powershellSingleQuote(worker.worktree_path)}`] : []),
+		`Invoke-Expression ${powershellSingleQuote(commandLine)}`,
+		"",
+	].join("\r\n");
+	await Bun.write(scriptPath, script);
+	const powershell = Bun.which("pwsh") ? "pwsh" : "powershell";
+	return `${powershell} -NoExit -ExecutionPolicy Bypass -File ${powershellSingleQuote(scriptPath)}`;
 }
 interface GjcTeamInitialLane {
 	label: string;
@@ -1995,33 +2037,52 @@ async function startTmuxSession(
 	try {
 		const workers: GjcTeamWorker[] = [];
 		let rightStackRootPaneId: string | null = null;
+		let rightStackRootPsmuxTarget: string | null = null;
 		for (const worker of config.workers) {
 			const splitDirection: string = worker.index === 1 ? "-h" : "-v";
 			const splitTarget: string =
 				worker.index === 1 ? config.leader.pane_id : (rightStackRootPaneId ?? config.leader.pane_id);
-			const split: Bun.SyncSubprocess<"pipe", "pipe"> = Bun.spawnSync(
-				[
-					config.tmux_command,
-					"split-window",
-					splitDirection,
-					"-t",
-					splitTarget,
-					"-d",
-					"-P",
-					"-F",
-					"#{pane_id}",
-					"-c",
-					worker.worktree_path ?? config.leader.cwd,
-					buildWorkerCommand(config, worker),
-				],
-				{ stdout: "pipe", stderr: "pipe" },
-			);
-			if (split.exitCode !== 0)
-				throw new Error(split.stderr.toString().trim() || `tmux_split_failed:${config.tmux_target}:${worker.id}`);
-			const paneId: string = split.stdout.toString().trim().split(/\r?\n/)[0]?.trim() ?? "";
+			const psmuxPane = isPsmuxCommand(config.tmux_command)
+				? await startPsmuxWorkerPane(
+						config,
+						dir,
+						worker,
+						splitDirection,
+						worker.index === 1 ? config.tmux_target : (rightStackRootPsmuxTarget ?? config.tmux_target),
+					)
+				: null;
+			const paneId: string = psmuxPane
+				? psmuxPane.paneId
+				: (() => {
+						const split: Bun.SyncSubprocess<"pipe", "pipe"> = Bun.spawnSync(
+							[
+								config.tmux_command,
+								"split-window",
+								splitDirection,
+								"-t",
+								splitTarget,
+								"-d",
+								"-P",
+								"-F",
+								"#{pane_id}",
+								"-c",
+								worker.worktree_path ?? config.leader.cwd,
+								buildWorkerCommand(config, worker),
+							],
+							{ stdout: "pipe", stderr: "pipe" },
+						);
+						if (split.exitCode !== 0)
+							throw new Error(
+								split.stderr.toString().trim() || `tmux_split_failed:${config.tmux_target}:${worker.id}`,
+							);
+						return split.stdout.toString().trim().split(/\r?\n/)[0]?.trim() ?? "";
+					})();
 			if (!paneId.startsWith("%")) throw new Error(`tmux_split_missing_pane:${config.tmux_target}:${worker.id}`);
 			rollbackPaneIds.push(paneId);
-			if (worker.index === 1) rightStackRootPaneId = paneId;
+			if (worker.index === 1) {
+				rightStackRootPaneId = paneId;
+				rightStackRootPsmuxTarget = psmuxPane?.target ?? `${config.tmux_target}.${paneId.slice(1)}`;
+			}
 			workers.push({ ...worker, pane_id: paneId });
 		}
 		Bun.spawnSync([config.tmux_command, "select-layout", "-t", config.tmux_target, "main-vertical"], {
@@ -2078,6 +2139,68 @@ async function startTmuxSession(
 			Bun.spawnSync([config.tmux_command, "kill-pane", "-t", paneId], { stdout: "ignore", stderr: "ignore" });
 		throw error;
 	}
+}
+interface PsmuxPaneDescriptor {
+	paneId: string;
+	index: string;
+	target: string;
+}
+function listPaneDescriptors(config: GjcTeamConfig): PsmuxPaneDescriptor[] {
+	const result = Bun.spawnSync(
+		[config.tmux_command, "list-panes", "-t", config.tmux_target, "-F", "#{pane_id}\t#{pane_index}"],
+		{
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	if (result.exitCode !== 0) return [];
+	return result.stdout
+		.toString()
+		.split(/\r?\n/)
+		.map(line => line.trim())
+		.map(line => {
+			const [paneId = "", index = ""] = line.split(/\t/);
+			return { paneId, index, target: `${config.tmux_target}.${index}` };
+		})
+		.filter(pane => pane.paneId.startsWith("%") && pane.index.length > 0);
+}
+function newestPane(before: PsmuxPaneDescriptor[], after: PsmuxPaneDescriptor[]): PsmuxPaneDescriptor | undefined {
+	const beforeSet = new Set(before.map(pane => pane.paneId));
+	return after.find(pane => !beforeSet.has(pane.paneId));
+}
+async function startPsmuxWorkerPane(
+	config: GjcTeamConfig,
+	dir: string,
+	worker: GjcTeamWorker,
+	splitDirection: string,
+	splitTarget: string,
+): Promise<PsmuxPaneDescriptor> {
+	const before = listPaneDescriptors(config);
+	const split = Bun.spawnSync(
+		[
+			config.tmux_command,
+			"split-window",
+			splitDirection,
+			"-t",
+			splitTarget,
+			"-d",
+			"-c",
+			worker.worktree_path ?? config.leader.cwd,
+		],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	if (split.exitCode !== 0)
+		throw new Error(split.stderr.toString().trim() || `psmux_split_failed:${config.tmux_target}:${worker.id}`);
+	const pane = newestPane(before, listPaneDescriptors(config));
+	if (!pane?.paneId.startsWith("%")) throw new Error(`psmux_split_missing_pane:${config.tmux_target}:${worker.id}`);
+	const launchCommand = await buildPsmuxWorkerLaunchCommand(config, worker, dir);
+	const send = Bun.spawnSync([config.tmux_command, "send-keys", "-t", pane.target, launchCommand, "Enter"], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (send.exitCode !== 0)
+		throw new Error(send.stderr.toString().trim() || `psmux_send_keys_failed:${config.tmux_target}:${worker.id}`);
+	return pane;
 }
 function paneBelongsToTeamTarget(config: GjcTeamConfig, paneId: string): boolean {
 	if (paneId === config.leader.pane_id) return false;

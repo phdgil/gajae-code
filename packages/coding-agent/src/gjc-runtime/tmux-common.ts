@@ -15,6 +15,7 @@ export const GJC_TMUX_PROJECT_OPTION = "@gjc-project";
 export const GJC_TMUX_OWNERSHIP_ROOT_ENV = "GJC_TMUX_OWNERSHIP_ROOT";
 export const GJC_TMUX_SESSION_ID_OPTION = "@gjc-session-id";
 export const GJC_TMUX_SESSION_STATE_FILE_OPTION = "@gjc-session-state-file";
+export const GJC_TMUX_ACTIVE_SESSION_ENV = "GJC_TMUX_ACTIVE_SESSION";
 
 export interface GjcTmuxProfileCommand {
 	description: string;
